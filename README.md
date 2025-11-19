@@ -1,8 +1,8 @@
 # cs556-final-project
 
-![Project map](./cs556-map.png)
-
 ## Overview
+
+![Project map](./cs556-map.png)
 
 ## Project Phases
 - Phase 1: Navigation and Localization – The robot navigates and localizes throughout the entire known layout.
