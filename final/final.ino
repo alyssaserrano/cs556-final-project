@@ -1,5 +1,3 @@
-//Lab 11 - Autonomous Localization with Particle Filter
-
 #include <Pololu3piPlus32U4.h>
 #include <Pololu3piPlus32U4Buttons.h>
 using namespace Pololu3piPlus32U4;
@@ -8,91 +6,165 @@ using namespace Pololu3piPlus32U4;
 #include "Map.h"
 #include "sonar.h"
 #include "PIDcontroller.h"
-
-// Upload libraries
 #include <Gaussian.h>
 #include <ArduinoJson.h>
 
-
-// Includes and Definitions
-#include <YourSensorLibraries.h>
+// Constants and Parameters
 #define WALL_DIST 20     // Desired distance from wall in cm
-#define OBSTACLE_THRESH 15 // Obstacle detected below this distance (cm)
+#define OBSTACLE_THRESH 15 // Threshold for obstacle (cm)
+#define BASE_SPEED 120
 
-// Setup: sensors, motors, serial
-void setup() {
-  Serial.begin(9600);
-  setupMotors();
-  setupSensors();
-  // Any initialization code
-}
+// Hardware objects
+Pololu3piPlus32U4Motors motors;
+Pololu3piPlus32U4Encoders encoders;
+SonarSensor sonar; // Replace with your actual sonar class
+PIDcontroller pd_obs(0.6, 0.03, 0.25);
+Odometry odometry;
 
-// State
-enum Mode { WALL_FOLLOW, OBSTACLE_AVOID, AT_GOAL };
+// State variables
+float wallDist;
+float distFromWall = WALL_DIST;
+int PDout = 0;
+bool is_localized = false;
+int movement_cycles = 0;
+
+// Odometry tracking
+float x = 0, y = 0, theta = 0;
+float x_last = 0, y_last = 0, theta_last = 0;
+long encCountsLeft = 0, encCountsRight = 0;
+long deltaL = 0, deltaR = 0;
+
+// Mode/state machine
+enum Mode { WALL_FOLLOW, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
+// Start at wall following
 Mode currentMode = WALL_FOLLOW;
 
+// Setup all hardware and subsystems
+void setup() {
+  Serial.begin(9600);
+
+  // Turn head to left
+  Servo.attach(90);
+}
+
+// Main control loop
 void loop() {
-  updateSensors(); // Update global sensor/state variables
+
+  // Select Action
+  switch(currentMode){
+    case WALL_FOLLOW:
+      wallFollow();
+      break;
+    case AT_GOAL:
+      handleGoal();
+      break;
+    case AT_CORNER:
+      atCorner();
+      break;
+    case OBSTACLE_AVOID:
+      obstacleAvoid();
+      break;
+  }
+
   
+}
+
+// ---- Core Behaviors ----
+
+// Wall following logic
+void wallFollow() {
+  wallDist = sonar.readDist();
+
+  if (wallDist <= 0) {
+    // Sensor failed: slow forward
+    motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+    return;
+  }
+
+  PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
+
+  int16_t left = constrain(BASE_SPEED - PDout, -400, 400);
+  int16_t right = constrain(BASE_SPEED + PDout, -400, 400);
+
+  motors.setSpeeds(left, right);
+
+  // Check for obstacle ahead
+  float frontDist = sonar.readDist();
+  if (frontDist < OBSTACLE_THRESH) {
+    currentMode = OBSTACLE_AVOID;
+  }
+
+  // Check for goal arrival
   if (atGoalLocation()) {
     currentMode = AT_GOAL;
-    handleGoal();
-    // Select next goal or finish
   }
-  else if (isObstacleAhead()) {
-    currentMode = OBSTACLE_AVOID;
-    avoidObstacle();
-    // When clear, return to wall following
-  }
-  else {
-    currentMode = WALL_FOLLOW;
-    wallFollow();
-  }
-  // Debug output, optional
-  Serial.println(currentMode);
 }
 
-// Function stubs
-void wallFollow() {
-  // Maintain WALL_DIST from wall using sensor readings
-  // Steer left or right as needed
-    // Keep reading sonar and compute lateral correction
-  wallDist = sonar.readDist();
-  if (wallDist <= 0) {
-    // bad read: just creep forward
-    motors.setSpeeds(baseSpeed, baseSpeed);
-  } else {
-    PDout = (int)pd_obs.update(wallDist, distFromWall); // control effort
+// ---- Stubs for required functions ----
 
-    int forward = 120;
-    int16_t lSpeed = (int16_t)constrain(forward - PDout, -400, 400);
-    int16_t rSpeed = (int16_t)constrain(forward + PDout, -400, 400);
-    motors.setSpeeds(lSpeed, rSpeed);
+// Update all sensor readings and global variables
+void updateSensors() {
+  // Example: update IR, sonar, bumper readings, etc.
 }
 
-bool isObstacleAhead() {
-  // Return true if obstacle detected within OBSTACLE_THRESH
-  float front_dist = sonar.readDist();
+// Run localization step (particle filter, odometry, etc.)
+void updateLocalization() {
+  float dx = x - x_last;
+  float dy = y - y_last;
+  float dtheta = wrapPi(theta - theta_last);
+  particle.move_particles(dx, dy,  dtheta);
 
+
+  //Measaure, estimation, and resample
+  //Calculate particle's posterior probabilities, calculate estimated robot's position, and resample
+  //TODO: Put code under here 
+  // Update measurement & resample
+  particle.measure();
+
+
+  // Display all particle locations and estimated robot location on screen   
+  //TODO: Put code under here 
+  // Display particle info
+  particle.print_particles();
+  
     
-  if (front_dist < OBSTACLE_THRESH) {
-    return true;
-  } else {
-  return false;
-  }
+  //save last odometer reading
+  x_last = x;
+  y_last = y;
+  theta_last = theta;
 }
 
+// Obstacle avoidance behavior
 void avoidObstacle() {
-  // Example: Stop, turn away from the obstacle, resume wall follow
+  motors.setSpeeds(0, 0);
+  delay(300);
+  motors.setSpeeds(-BASE_SPEED, BASE_SPEED); // turn left
+  delay(400);
+  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+  delay(300);
+  currentMode = WALL_FOLLOW;
 }
 
+// Detect if robot is at goal location
 bool atGoalLocation() {
-  // Use position tracking or goal markers
+  
 }
 
+// Logic to run when a goal is reached
 void handleGoal() {
-  // Mark goal as visited, update goals list, or complete mission
+  
 }
-void localization(){
 
+// Track Coordinates traveled.
+void visited(){
+  
+}
+
+// Odometry & distance calculation
+void CalculateDistance() {
+  deltaL = encoders.getCountsAndResetLeft();
+  deltaR = encoders.getCountsAndResetRight();
+  encCountsLeft += deltaL;
+  encCountsRight += deltaR;
+  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
 }
