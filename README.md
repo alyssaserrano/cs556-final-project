@@ -4,6 +4,13 @@
 
 ![Project map](./cs556-map.png)
 
+## Testing Simulation
+``` bash
+cd /test/
+g++ test_visitedStates.cpp -o test_visitedStates
+./test_visitedStates
+```
+
 ## Project Phases
 - Phase 1: Navigation and Localization – The robot navigates and localizes throughout the entire known layout.
 - Phase 2: Return to Staging/Charging Dock – Once all three bins have been collected, the robot will return to the staging and charging dock.
