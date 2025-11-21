@@ -9,6 +9,7 @@ using namespace Pololu3piPlus32U4;
 #include <Gaussian.h>
 #include <ArduinoJson.h>
 
+// ----------------- Set up ----------------------------------------//
 // Constants and Parameters
 #define WALL_DIST 20     // Desired distance from wall in cm
 #define OBSTACLE_THRESH 15 // Threshold for obstacle (cm)
@@ -20,6 +21,9 @@ Pololu3piPlus32U4Encoders encoders;
 SonarSensor sonar; // Replace with your actual sonar class
 PIDcontroller pd_obs(0.6, 0.03, 0.25);
 Odometry odometry;
+
+// Map object
+Map map;
 
 // State variables
 float wallDist;
@@ -47,7 +51,9 @@ void setup() {
   Servo.attach(90);
 }
 
-// Main control loop
+
+//-------------------------- Main control loop --------------------------//
+// TODO: Implement correct behavior depending on switch case.
 void loop() {
 
   // Select Action
@@ -69,9 +75,49 @@ void loop() {
   
 }
 
-// ---- Core Behaviors ----
+// -------------------------------------------- Core Behaviors --------------------------------------//
 
-// Wall following logic
+// Update all sensor readings and global variables
+void updateSensors() {
+  // TODO???: Example: update IR, sonar, bumper readings, etc.
+}
+
+void turnBody() {
+  // TODO: Turn the body accordingly when we hit a corner or obstacle.
+
+}
+
+// Run localization step (particle filter, odometry, etc.)
+// TODO: Sanity check localization through simulation of some sort.
+void updateLocalization() {
+  // Localization update
+  float dx = x - x_last;
+  float dy = y - y_last;
+  float dtheta = wrapPi(theta - theta_last);
+  particle.move_particles(dx, dy,  dtheta);
+
+  //Measaure, estimation, and resample
+  particle.measure();
+  particle.print_particles();
+
+  // Mark visited state in map
+  map.visited((int)x, (int)y);
+
+  // Check for goals and docking station
+  if (map.atGoalLocation((int)x, (int)y)) {
+    // Handle goal logic (e.g., set mode, log, etc.)
+  }
+  if (map.atDockingStation((int)x, (int)y)) {
+    // Handle docking logic (e.g., stop, log, etc.)
+  }
+
+  //save last odometer reading
+  x_last = x;
+  y_last = y;
+  theta_last = theta;
+}
+
+// -------------------------------------Past Lab Functions just in case. -------------------------------------//
 void wallFollow() {
   wallDist = sonar.readDist();
 
@@ -98,66 +144,6 @@ void wallFollow() {
   if (atGoalLocation()) {
     currentMode = AT_GOAL;
   }
-}
-
-// ---- Stubs for required functions ----
-
-// Update all sensor readings and global variables
-void updateSensors() {
-  // Example: update IR, sonar, bumper readings, etc.
-}
-
-// Run localization step (particle filter, odometry, etc.)
-void updateLocalization() {
-  float dx = x - x_last;
-  float dy = y - y_last;
-  float dtheta = wrapPi(theta - theta_last);
-  particle.move_particles(dx, dy,  dtheta);
-
-
-  //Measaure, estimation, and resample
-  //Calculate particle's posterior probabilities, calculate estimated robot's position, and resample
-  //TODO: Put code under here 
-  // Update measurement & resample
-  particle.measure();
-
-
-  // Display all particle locations and estimated robot location on screen   
-  //TODO: Put code under here 
-  // Display particle info
-  particle.print_particles();
-  
-    
-  //save last odometer reading
-  x_last = x;
-  y_last = y;
-  theta_last = theta;
-}
-
-// Obstacle avoidance behavior
-void avoidObstacle() {
-  motors.setSpeeds(0, 0);
-  delay(300);
-  motors.setSpeeds(-BASE_SPEED, BASE_SPEED); // turn left
-  delay(400);
-  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-  delay(300);
-  currentMode = WALL_FOLLOW;
-}
-
-// Detect if robot is at goal location
-bool atGoalLocation() {
-  
-}
-
-// Logic to run when a goal is reached
-void handleGoal() {
-  
-}
-
-// Track Coordinates traveled.
-void visited(){
-  
 }
 
 // Odometry & distance calculation

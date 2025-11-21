@@ -8,10 +8,20 @@ to any line segment within a predefined set of segments (maps array).
 
 #include "Map.h"
 #include <math.h>
+#include <vector>
+#include <utility>
 //DynamicJsonDocument doc(400);
 float none[2] = {-1.0,-1.0};
 static float res[2]; 
 
+
+// Hardcoded path for traversal (from your simulation)
+const std::vector<std::pair<int, int>> fullPath = {
+    {0,0}, {0,1}, {0,2}, {0,3},
+    {1,3}, {2,3}, {3,3}, {4,3}, {5,3}, {5,2}, {5,1}, {6,1}, {6,2},
+    {6,3}, {7,3}, {8,3}, {8,2}, {8,1}, {8,0},
+    {7,0}, {7,1}, {7,2}, {7,1}, {7,0}, {6,0}, {5,0}, {4,0}, {4,1}, {4,2}, {3,2}, {2,2}, {1,2}, {1,1}, {1,0}, {1,1}, {2,1}
+};
 
 // --- WALL SEGMENTS (outer box + stepped inner walls) ---
 static const int MAP_N = 9;
@@ -30,11 +40,69 @@ float maps[MAP_N][2][2] = {
   { {160, 60}, {160, 80} },  // short vertical near right
 };
 
-Map::Map(){
-    
- 
+// Hardcoded goal positions for the map
+const int goalPositions[3][2] = { {6,2}, {8,0}, {2,1} };
+
+Map::Map(){}
+
+// Check if at corner location
+bool Map::cornerDetected(int x, int y){
+  // TODO: Indicate what locations are corners (do this on sim first then implement on hardware.)
 }
 
+// Check if at goal location
+bool Map::atGoalLocation(int x, int y) {
+  for (int i = 0; i < 3; ++i) {
+    if (goalPositions[i][0] == x && goalPositions[i][1] == y) return true;
+  }
+  return false;
+}
+
+// Check if at docking station
+bool Map::atDockingStation(int x, int y) {
+  return x == dockX && y == dockY;
+}
+
+// Log visited waypoint
+void Map::logWaypoint(int x, int y) {
+  Serial.print("Visited cell (");
+  Serial.print(x);
+  Serial.print(",");
+  Serial.print(y);
+  Serial.println(")");
+}
+
+// Track Coordinates traveled.
+void Map::visited(int x, int y){
+  if (isTraversable(x, y)) {
+    visitArray[x][y] += 1;     // Mark as visited (count visits)
+    logWaypoint(x, y);
+    if (atDockingStation(x, y)) {
+      Serial.print("At docking station (");
+      Serial.print(x);
+      Serial.print(",");
+      Serial.print(y);
+      Serial.println(")");
+    }
+    if (atGoalLocation(x, y)) {
+      Serial.print("Reached goal at (");
+      Serial.print(x);
+      Serial.print(",");
+      Serial.print(y);
+      Serial.println(")");
+    }
+  }
+}
+
+// Obstacle checking
+bool Map::isTraversable(int x, int y) {
+    // All locations that are not traversable.
+    if ((x == 2 && y == 0) || (x == 3 && y == 0)) return false;
+    return true;
+}
+
+
+// -------------- PROFESSOR PROVIDED METHODS ---------------
 //This method calculates the closest distance 
 //from a given origin point in a specified direction theta 
 //to any line segment in the maps array.
