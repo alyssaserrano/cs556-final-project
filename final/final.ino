@@ -23,6 +23,13 @@ using namespace Pololu3piPlus32U4;
 #define w 9.6
 #define gearRatio 75
 
+// Particle filter
+#define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
+#define N_particles 25
+#define move_noise   0.01   // σ_d^2
+#define rotate_noise 0.05   // σ_θ^2
+#define ultra_noise  0.10   // σ_s^2
+
 // Hardware objects
 Motors motors;
 Encoders encoders;
@@ -36,12 +43,6 @@ OLED display;
 Map map;
 
 // Particle filter
-#define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
-#define N_particles 25
-#define move_noise   0.01   // σ_d^2
-#define rotate_noise 0.05   // σ_θ^2
-#define ultra_noise  0.10   // σ_s^2
-
 ParticleFilter particle(map, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
 
 // State variables
