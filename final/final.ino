@@ -16,17 +16,33 @@ using namespace Pololu3piPlus32U4;
 #define BASE_SPEED 120
 #define FAST_SPEED 250  // Speed on white line
 
+#define diaL 3.2 //define physical robot parameters
+#define diaR  3.2
+#define nL 12
+#define nR 12
+#define w 9.6
+#define gearRatio 75
+
 // Hardware objects
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
 PIDcontroller pd_obs(0.6, 0.03, 0.25);
-Odometry odometry;
+Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
 
 // Map object
 Map map;
+
+// Particle filter
+#define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
+#define N_particles 25
+#define move_noise   0.01   // σ_d^2
+#define rotate_noise 0.05   // σ_θ^2
+#define ultra_noise  0.10   // σ_s^2
+
+ParticleFilter particle(map, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
 
 // State variables
 float wallDist;
@@ -34,6 +50,7 @@ float distFromWall = WALL_DIST;
 int PDout = 0;
 bool is_localized = false;
 int movement_cycles = 0;
+int currentSpeed = BASE_SPEED;
 
 // Odometry tracking
 float x = 0, y = 0, theta = 0;
@@ -42,7 +59,7 @@ long encCountsLeft = 0, encCountsRight = 0;
 long deltaL = 0, deltaR = 0;
 
 //Sensor readings
-unsigned int lineSensorValues[5];
+unsigned int lineDetectionValues[5];
 
 // Mode/state machine
 enum Mode { WALL_FOLLOW, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
@@ -56,7 +73,6 @@ void setup() {
   // Turn head to left
   Servo.attach(90);
 }
-
 
 //-------------------------- Main control loop --------------------------//
 // TODO: Implement correct behavior depending on switch case.
@@ -162,6 +178,14 @@ void wallFollow() {
     currentSpeed = BASE_SPEED;  // Normal speed
   }
 
+  /*
+  // Check for black square (pick bin - Phase 3, B1/B2)
+  if (detectBlackSquare()) {
+    currentMode = AT_GOAL;  // Trigger pick sequence
+    return;
+  }  
+  */
+
   PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
 
   int16_t left = constrain(BASE_SPEED - PDout, -400, 400);
@@ -177,17 +201,19 @@ void wallFollow() {
   }
 
   // Check for goal arrival
-  if (atGoalLocation()) {
+  if (map.atGoalLocation((int)x, (int)y)) {
     currentMode = AT_GOAL;
   }
 }
 
 bool detectWhiteLine(){
-  lineSensor.read(lineSensorValues);
+  lineSensors.read(lineDetectionValues);
 
   const int whiteThreshold = 1500;
+  int whiteCount = 0;
+
   for (int i = 0; i < 5; i++) {
-    if (lineSensorValues[i] < WHITE_THRESHOLD) {
+    if (lineDetectionValues[i] < whiteThreshold) {
       whiteCount++;
     }
   }
@@ -196,9 +222,10 @@ bool detectWhiteLine(){
 
 /*B1 and B2 Code
 bool detectBlackSquare(){
-  lineSensor.read(lineSensorValues);
+  lineSensors.read(lineDetectionValues);
 
   const int blackThreshold = 1500;
+  int blackCount = 0;
 
   for (int i = 0; i < 5; i++) {
     if (lineDetectionValues[i] > blackThreshold) {
@@ -243,7 +270,7 @@ void spin360() {
   display.clear();
   display.print("Spin!");
   
-  // Time for 360 degree rotation
+  // Time for 360-degree rotation
   // Wheelbase = 9.7cm, circumference = pi * 9.7 = 30.5cm
   // At speed 120, roughly 3-4 seconds for 360
   motors.setSpeeds(120, -120);
