@@ -48,6 +48,10 @@ Map::Map(){}
 // Check if at corner location
 bool Map::cornerDetected(int x, int y){
   // TODO: Indicate what locations are corners (do this on sim first then implement on hardware.)
+  if (x == 1 && y == 3) return true;  // Left side lower corner
+  if (x == 1 && y == 1) return true;  // Left side upper corner
+  if (x == 4 && y == 2) return true;  // Middle turn
+  if (x == 7 && y == 1) return true;  // Right side turn
 }
 
 // Check if at goal location
