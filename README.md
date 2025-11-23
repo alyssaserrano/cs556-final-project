@@ -10,6 +10,8 @@ cd /test/
 g++ test_visitedStates.cpp -o test_visitedStates
 ./test_visitedStates
 ```
+## Strategy
+We are using our particle filtering as localization and hardcoded the landmark/critical locations.
 
 ## Project Phases
 - Phase 1: Navigation and Localization – The robot navigates and localizes throughout the entire known layout.
