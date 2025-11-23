@@ -4,12 +4,6 @@
 
 ![Project map](./cs556-map.png)
 
-## Testing Simulation
-``` bash
-cd /test/
-g++ test_visitedStates.cpp -o test_visitedStates
-./test_visitedStates
-```
 ## Strategy
 We are using our particle filtering as localization and hardcoded the landmark/critical locations.
 
@@ -27,3 +21,10 @@ We are using our particle filtering as localization and hardcoded the landmark/c
 - Step C (Demo Day): Due Dec 9
 - Step D: Due Dec 11
   - Poster and Final report.
+
+## Testing Simulation
+``` bash
+cd /test/
+g++ test_visitedStates.cpp -o test_visitedStates
+./test_visitedStates
+```
