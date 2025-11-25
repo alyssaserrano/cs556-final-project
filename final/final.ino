@@ -8,6 +8,7 @@ using namespace Pololu3piPlus32U4;
 #include "PIDcontroller.h"
 #include <Gaussian.h>
 #include <ArduinoJson.h>
+#include <Servo.h>
 
 // ----------------- Set up ----------------------------------------//
 // Constants and Parameters
@@ -25,7 +26,7 @@ using namespace Pololu3piPlus32U4;
 
 // Particle filter
 #define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
-#define N_particles 25
+#define N_particles 20
 #define move_noise   0.01   // σ_d^2
 #define rotate_noise 0.05   // σ_θ^2
 #define ultra_noise  0.10   // σ_s^2
@@ -34,16 +35,19 @@ using namespace Pololu3piPlus32U4;
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
-PIDcontroller pd_obs(0.6, 0.03, 0.25);
+PIDcontroller pd_obs(0.6, 0.03, 0.25, -100.0, 100.0, 1.0);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
 
 // Map object
-Map map;
+Map myMap;
+
+// Servo
+Servo servo;
 
 // Particle filter
-ParticleFilter particle(map, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
+ParticleFilter particle(myMap, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
 
 // State variables
 float wallDist;
@@ -63,16 +67,19 @@ long deltaL = 0, deltaR = 0;
 unsigned int lineDetectionValues[5];
 
 // Mode/state machine
-enum Mode { WALL_FOLLOW, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
+enum Mode { MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
 // Start at wall following
 Mode currentMode = WALL_FOLLOW;
+
+// wrapPi function
+static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
 
 // Setup all hardware and subsystems
 void setup() {
   Serial.begin(9600);
 
   // Turn head to left
-  Servo.attach(90);
+  servo.attach(90);
 }
 
 //-------------------------- Main control loop --------------------------//
@@ -80,19 +87,12 @@ void setup() {
 void loop() {
 
   // Select Action
-  switch(currentMode){
-    case WALL_FOLLOW:
-      wallFollow();
-      break;
-    case AT_GOAL:
-      handleGoal();
-      break;
-    case AT_CORNER:
-      atCorner();
-      break;
-    case OBSTACLE_AVOID:
-      obstacleAvoid();
-      break;
+  // Check for goals and docking station
+  if (myMap.atGoalLocation((int)x, (int)y)) {
+    // Handle goal logic (e.g., set mode, log, etc.)
+  }
+  if (myMap.atDockingStation((int)x, (int)y)) {
+    // Handle docking logic (e.g., stop, log, etc.)
   }
 
 }
@@ -134,8 +134,12 @@ void turnBody() {
 
 
 // Run localization step (particle filter, odometry, etc.)
+// Mark the coordinate we are at.
 // TODO: Sanity check localization through simulation of some sort.
 void updateLocalization() {
+  // Calculate the distance.
+  CalculateDistance();
+
   // Localization update
   float dx = x - x_last;
   float dy = y - y_last;
@@ -147,21 +151,23 @@ void updateLocalization() {
   particle.print_particles();
 
   // Mark visited state in map
-  map.visited((int)x, (int)y);
-
-  // Check for goals and docking station
-  if (map.atGoalLocation((int)x, (int)y)) {
-    // Handle goal logic (e.g., set mode, log, etc.)
-  }
-  if (map.atDockingStation((int)x, (int)y)) {
-    // Handle docking logic (e.g., stop, log, etc.)
-  }
+  myMap.visited((int)x, (int)y);
 
   //save last odometer reading
   x_last = x;
   y_last = y;
   theta_last = theta;
 }
+
+// Odometry & distance calculation
+void CalculateDistance() {
+  deltaL = encoders.getCountsAndResetLeft();
+  deltaR = encoders.getCountsAndResetRight();
+  encCountsLeft += deltaL;
+  encCountsRight += deltaR;
+  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
+}
+
 
 // -------------------------------------Past Lab Functions just in case. -------------------------------------//
 void wallFollow() {
@@ -197,12 +203,12 @@ void wallFollow() {
   int current_x = (int)(x / 20.0);  // x in cm / 20cm per cell
   int current_y = (int)(y / 20.0);  // y in cm / 20cm per cell
   
-  if (map.cornerDetected(current_x, current_y)) {
+  if (myMap.cornerDetected(current_x, current_y)) {
     currentMode = AT_CORNER;
   }
 
   // Check for goal arrival
-  if (map.atGoalLocation((int)x, (int)y)) {
+  if (myMap.atGoalLocation((int)x, (int)y)) {
     currentMode = AT_GOAL;
   }
 }
@@ -280,12 +286,3 @@ void spin360() {
   motors.setSpeeds(0, 0);
   delay(300);
 }*/
-
-// Odometry & distance calculation
-void CalculateDistance() {
-  deltaL = encoders.getCountsAndResetLeft();
-  deltaR = encoders.getCountsAndResetRight();
-  encCountsLeft += deltaL;
-  encCountsRight += deltaR;
-  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
-}

@@ -8,15 +8,18 @@ to any line segment within a predefined set of segments (maps array).
 
 #include "Map.h"
 #include <math.h>
-#include <vector>
-#include <utility>
 //DynamicJsonDocument doc(400);
 float none[2] = {-1.0,-1.0};
 static float res[2]; 
 
+const int PATH_SIZE = 36;
 
-// Hardcoded path for traversal (from your simulation)
-const std::vector<std::pair<int, int>> fullPath = {
+struct Point {
+    int x;
+    int y;
+};
+
+const Point fullPath[PATH_SIZE] = {
     {0,0}, {0,1}, {0,2}, {0,3},
     {1,3}, {2,3}, {3,3}, {4,3}, {5,3}, {5,2}, {5,1}, {6,1}, {6,2},
     {6,3}, {7,3}, {8,3}, {8,2}, {8,1}, {8,0},
