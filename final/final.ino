@@ -67,9 +67,8 @@ long deltaL = 0, deltaR = 0;
 unsigned int lineDetectionValues[5];
 
 // Mode/state machine
-enum Mode { MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
-// Start at wall following
-Mode currentMode = WALL_FOLLOW;
+// Start at move forward
+Mode currentMode = MOVE_FORWARD;
 
 // wrapPi function
 static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
@@ -78,33 +77,71 @@ static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a 
 void setup() {
   Serial.begin(9600);
 
-  // Turn head to left
-  servo.attach(90);
+  // For localization (lab 11 reference)
+      while (!Serial) continue;
+    delay(1000);
+
+  //seed RNG for diverse particles.
+  randomSeed(analogRead(A0));  
+ 
+  float origin[2] = {0.0, 0.0};
+  theta = 0.0f;
+  float closestDist = myMap.closest_distance(origin, theta);
+  Serial.println("Map test distance:");
+  Serial.println(closestDist);
+  
+  Serial.println("Starting autonomous localization...");
+  delay(2000);
+
 }
 
 //-------------------------- Main control loop --------------------------//
-// TODO: Implement correct behavior depending on switch case.
 void loop() {
 
-  // Select Action
-  // Check for goals and docking station
-  if (myMap.atGoalLocation((int)x, (int)y)) {
-    // Handle goal logic (e.g., set mode, log, etc.)
-  }
-  if (myMap.atDockingStation((int)x, (int)y)) {
-    // Handle docking logic (e.g., stop, log, etc.)
+  // 1) Update localization.
+  updateLocalization();
+
+  // 2) Choose action.
+  switch(currentMode){
+    case MOVE_FORWARD:
+      move_forward();
+      break;
+    case TURN_LEFT:
+      turn_left();
+      break;
+    case TURN_RIGHT:
+      turn_right();
+      break;
+    case REVERSE:
+      reverse();
+      break;
+    case AT_GOAL:
+      at_goal();
+      break;
+    case STOP:
+      stop();
+      break;
   }
 
 }
 
 // -------------------------------------------- Core Behaviors --------------------------------------//
-
-// Update all sensor readings and global variables
-void updateSensors() {
-  // TODO???: Example: update IR, sonar, bumper readings, etc.
+//
+void reverseFullPath() {
+    Serial.println("Reversing hardcoded fullPath:");
+    for (int i = PATH_SIZE - 1; i >= 0; i--) {
+        Point target = fullPath[i];
+        Serial.print("Returning to cell (");
+        Serial.print(target.x);
+        Serial.print(",");
+        Serial.print(target.y);
+        Serial.println(")");
+        // Move robot to target if desired
+        delay(200); // Placeholder for movement
+    }
+    Serial.println("Reverse of path complete.");
 }
 
-//
 void atCorner() {
   motors.setSpeeds(0, 0);  // Stop
   delay(500);
@@ -148,10 +185,36 @@ void updateLocalization() {
 
   //Measaure, estimation, and resample
   particle.measure();
-  particle.print_particles();
+  //particle.print_particles();
 
-  // Mark visited state in map
-  myMap.visited((int)x, (int)y);
+  // Convert physical coordinates to cell indices for the map
+  int cell_x = (int)(x / 20.0);
+  int cell_y = (int)(y / 20.0);
+
+  // Mark visit
+  myMap.visited(cell_x, cell_y);
+
+  // Decide on mode (special cell action or move forward)
+  Mode turn = myMap.cornerDetected(cell_x, cell_y);
+
+  // ===== GOAL LOGIC =====
+  if (myMap.atGoalLocation(cell_x, cell_y)) {
+    currentMode = AT_GOAL;
+
+        // If at the final goal coordinate of (2,1), trigger reversal
+    if (cell_x == 2 && cell_y == 1) {
+      Serial.println("Final goal reached. Reversing path now.");
+      reverseFullPath();  // Call your reversal function
+      currentMode = STOP; // stop after reversing
+    }
+  }
+    else {
+    Mode turn = myMap.cornerDetected(cell_x, cell_y);
+    if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
+    else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
+    else if (turn == REVERSE)     currentMode = REVERSE;
+    else                          currentMode = MOVE_FORWARD;
+  }
 
   //save last odometer reading
   x_last = x;
@@ -170,7 +233,7 @@ void CalculateDistance() {
 
 
 // -------------------------------------Past Lab Functions just in case. -------------------------------------//
-void wallFollow() {
+/*void wallFollow() {
   wallDist = sonar.readDist();
 
   if (wallDist <= 0) {
@@ -191,7 +254,7 @@ void wallFollow() {
     currentMode = AT_GOAL;  // Trigger pick sequence
     return;
   }  
-  */
+  
 
   PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
 
@@ -211,7 +274,7 @@ void wallFollow() {
   if (myMap.atGoalLocation((int)x, (int)y)) {
     currentMode = AT_GOAL;
   }
-}
+}*/
 
 bool detectWhiteLine(){
   lineSensors.read(lineDetectionValues);
