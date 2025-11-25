@@ -1,18 +1,19 @@
 #include <Pololu3piPlus32U4.h>
 #include <Pololu3piPlus32U4Buttons.h>
 using namespace Pololu3piPlus32U4;
-#include "particle_filter.h"
 #include "odometry.h"
 #include "Map.h"
 #include "sonar.h"
-#include "PIDcontroller.h"
+//#include "PIDcontroller.h"
 #include <Gaussian.h>
 #include <ArduinoJson.h>
 #include <Servo.h>
+#include "PDcontroller.h"
 
 // ----------------- Set up ----------------------------------------//
 // Constants and Parameters
-#define WALL_DIST 20     // Desired distance from wall in cm
+#define lenOfMap 180
+#define WALL_DIST 10     // Desired distance from wall in cm
 #define OBSTACLE_THRESH 15 // Threshold for obstacle (cm)
 #define BASE_SPEED 120
 #define FAST_SPEED 250  // Speed on white line
@@ -24,18 +25,18 @@ using namespace Pololu3piPlus32U4;
 #define w 9.6
 #define gearRatio 75
 
-// Particle filter
-#define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
-#define N_particles 20
-#define move_noise   0.01   // σ_d^2
-#define rotate_noise 0.05   // σ_θ^2
-#define ultra_noise  0.10   // σ_s^2
+// Wall following values
+#define minOutput -100
+#define maxOutput 100
+#define kp 1
+#define kd 1
+#define base_speed 100
 
 // Hardware objects
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
-PIDcontroller pd_obs(0.6, 0.03, 0.25, -100.0, 100.0, 1.0);
+PDcontroller PDcontroller(kp, kd, minOutput, maxOutput);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
@@ -45,9 +46,6 @@ Map myMap;
 
 // Servo
 Servo servo;
-
-// Particle filter
-ParticleFilter particle(myMap, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
 
 // State variables
 float wallDist;
@@ -76,58 +74,16 @@ static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a 
 // Setup all hardware and subsystems
 void setup() {
   Serial.begin(9600);
-
-  // For localization (lab 11 reference)
-      while (!Serial) continue;
-    delay(1000);
-
-  //seed RNG for diverse particles.
-  randomSeed(analogRead(A0));  
- 
-  float origin[2] = {0.0, 0.0};
-  theta = 0.0f;
-  float closestDist = myMap.closest_distance(origin, theta);
-  Serial.println("Map test distance:");
-  Serial.println(closestDist);
-  
-  Serial.println("Starting autonomous localization...");
-  delay(2000);
+  servo.attach(5);
+  servo.write(180);
+  delay(40);
 
 }
 
 //-------------------------- Main control loop --------------------------//
 void loop() {
 
-  // 1) Update localization.
-  updateLocalization();
-
-  // 2) Choose action.
-  switch(currentMode){
-    case MOVE_FORWARD:
-      move_forward();
-      break;
-    case TURN_LEFT:
-      turn_left();
-      motors.setSpeeds(0, 0);
-      delay(100);
-      break;
-    case TURN_RIGHT:
-      turn_right();
-      motors.setSpeeds(0, 0);
-      delay(100);
-      break;
-    case REVERSE:
-      reverse();
-      motors.setSpeeds(0, 0);
-      delay(100);
-      break;
-    case AT_GOAL:
-      at_goal();
-      break;
-    case STOP:
-      stop();
-      break;
-  }
+  wallFollow();
 
 }
 
@@ -182,58 +138,6 @@ void turnBody() {
 }
 */
 
-// Run localization step (particle filter, odometry, etc.)
-// Mark the coordinate we are at.
-// TODO: Sanity check localization through simulation of some sort.
-void updateLocalization() {
-  // Calculate the distance.
-  CalculateDistance();
-
-  // Localization update
-  float dx = x - x_last;
-  float dy = y - y_last;
-  float dtheta = wrapPi(theta - theta_last);
-  particle.move_particles(dx, dy,  dtheta);
-
-  //Measaure, estimation, and resample
-  particle.measure();
-  //particle.print_particles();
-
-  // Convert physical coordinates to cell indices for the map
-  int cell_x = (int)(x / 20.0);
-  int cell_y = (int)(y / 20.0);
-
-  // Mark visit
-  myMap.visited(cell_x, cell_y);
-
-  // Decide on mode (special cell action or move forward)
-  Mode turn = myMap.cornerDetected(cell_x, cell_y);
-
-  // ===== GOAL LOGIC =====
-  if (myMap.atGoalLocation(cell_x, cell_y)) {
-    currentMode = AT_GOAL;
-
-        // If at the final goal coordinate of (2,1), trigger reversal
-    if (cell_x == 2 && cell_y == 1) {
-      Serial.println("Final goal reached. Reversing path now.");
-      reverseFullPath();  // Call your reversal function
-      currentMode = STOP; // stop after reversing
-    }
-  }
-    else {
-      //Mode turn = myMap.cornerDetected(cell_x, cell_y);
-      if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
-      else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
-      else if (turn == REVERSE)     currentMode = REVERSE;
-      else                          currentMode = MOVE_FORWARD;
-  }
-
-  //save last odometer reading
-  x_last = x;
-  y_last = y;
-  theta_last = theta;
-}
-
 // Odometry & distance calculation
 void CalculateDistance() {
   deltaL = encoders.getCountsAndResetLeft();
@@ -241,15 +145,6 @@ void CalculateDistance() {
   encCountsLeft += deltaL;
   encCountsRight += deltaR;
   odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
-}
-
-// Movement Primitive
-void move_forward() {
-  Serial.println("MOVE_FORWARD");
-  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-  delay(500);  // Move forward for 500ms
-  motors.setSpeeds(0, 0);
-  delay(100);
 }
 
 void turn_left() {
@@ -292,21 +187,12 @@ void reverse() {
   delay(200);
 }
 
-void at_goal() {
-  Serial.println("AT_GOAL - Goal location reached!");
-  motors.setSpeeds(0, 0);
-  delay(1000);
-  
-  // Continue traversing
-  currentMode = MOVE_FORWARD;
-}
-
 void stop() {
   Serial.println("=== STOP - Traversal Complete ===");
   motors.setSpeeds(0, 0);
   
   // Beep to signal completion
-  buzzer.playFrequency(880, 500, 15);
+  //buzzer.playFrequency(880, 500, 15);
   
   // Stop forever
   while(true) {
@@ -316,20 +202,33 @@ void stop() {
 
 
 // -------------------------------------Past Lab Functions just in case. -------------------------------------//
-/*void wallFollow() {
+void wallFollow() {
+    //DO NOTE DELETE CODE AFTER EACH TASK, COMMENT OUT INSTEAD
   wallDist = sonar.readDist();
 
-  if (wallDist <= 0) {
-    // Sensor failed: slow forward
-    motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-    return;
-  }
 
-  if (detectWhiteLine()) {
-    currentSpeed = FAST_SPEED;  // Speed up!
-  } else {
-    currentSpeed = BASE_SPEED;  // Normal speed
-  }
+  //UNCOMMENT AFTER IMPLEMENTING PDcontroller
+  PDout = PDcontroller.update(wallDist, distFromWall); //uncomment if using PDcontroller 
+
+  //(LAB 5 - TASK 3.1) IMPLEMENT PDCONTROLLER 
+  
+  /*FIRST GO TO PDcontroller.h AND ADD PRIVATE VARIABLES NEEDED.
+    THEN GO TO PDcontroller.cpp AND COMPLETE THE update FUNCTION.
+    ONCE YOU IMPLEMENT update, UNCOMMENT CODE ABOVE TO USE CONTROLLER.*/
+
+  //(LAB 5 - TASK 3.2) PDCONTROLLER WALL FOLLOWING
+  int leftCmd  = (int)(BASE_SPEED + PDout);
+  int rightCmd = (int)(BASE_SPEED - PDout);
+
+  /*NOW THAT YOU HAVE IMPLEMENTED PDCONTROLLER, TAKE THE OUTPUT FROM PDout
+  AND SET THE MOTOR SPEEDS. CHANGE THE KP, KD, AND CLAMPING VALUES AT THE TOP
+  TO TEST (B-D).
+  Hint: Also use baseSpeed when setting motor speeds*/
+  leftCmd  = constrain(leftCmd,  -400, 400);
+  rightCmd = constrain(rightCmd, -400, 400);
+
+  motors.setSpeeds(leftCmd, rightCmd);
+}
 
   /*
   // Check for black square (pick bin - Phase 3, B1/B2)
@@ -359,7 +258,7 @@ void stop() {
   }
 }*/
 
-bool detectWhiteLine(){
+/*bool detectWhiteLine(){
   lineSensors.read(lineDetectionValues);
 
   const int whiteThreshold = 1500;
@@ -371,7 +270,7 @@ bool detectWhiteLine(){
     }
   }
   return (whiteCount >= 2);
-}
+}*/
 
 /*B1 and B2 Code
 bool detectBlackSquare(){
