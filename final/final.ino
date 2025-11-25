@@ -78,14 +78,8 @@ void setup() {
   Serial.begin(9600);
 
   // For localization (lab 11 reference)
-  while (!Serial) continue;
-  delay(1000);
-
-  lineSensors.initFiveSensors();
-
-  // Initialize servo
-  servo.attach(5);
-  servo.write(90);  // Turn head left
+      while (!Serial) continue;
+    delay(1000);
 
   //seed RNG for diverse particles.
   randomSeed(analogRead(A0));  
