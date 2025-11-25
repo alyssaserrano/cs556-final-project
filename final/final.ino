@@ -8,6 +8,7 @@ using namespace Pololu3piPlus32U4;
 #include "PIDcontroller.h"
 #include <Gaussian.h>
 #include <ArduinoJson.h>
+#include <Servo.h>
 
 // ----------------- Set up ----------------------------------------//
 // Constants and Parameters
@@ -25,7 +26,7 @@ using namespace Pololu3piPlus32U4;
 
 // Particle filter
 #define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
-#define N_particles 25
+#define N_particles 20
 #define move_noise   0.01   // σ_d^2
 #define rotate_noise 0.05   // σ_θ^2
 #define ultra_noise  0.10   // σ_s^2
@@ -34,16 +35,19 @@ using namespace Pololu3piPlus32U4;
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
-PIDcontroller pd_obs(0.6, 0.03, 0.25);
+PIDcontroller pd_obs(0.6, 0.03, 0.25, -100.0, 100.0, 1.0);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
 
 // Map object
-Map map;
+Map myMap;
+
+// Servo
+Servo servo;
 
 // Particle filter
-ParticleFilter particle(map, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
+ParticleFilter particle(myMap, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
 
 // State variables
 float wallDist;
@@ -63,48 +67,93 @@ long deltaL = 0, deltaR = 0;
 unsigned int lineDetectionValues[5];
 
 // Mode/state machine
-enum Mode { WALL_FOLLOW, OBSTACLE_AVOID, AT_GOAL, AT_CORNER };
-// Start at wall following
-Mode currentMode = WALL_FOLLOW;
+// Start at move forward
+Mode currentMode = MOVE_FORWARD;
+
+// wrapPi function
+static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
 
 // Setup all hardware and subsystems
 void setup() {
   Serial.begin(9600);
 
-  // Turn head to left
-  Servo.attach(90);
+  // For localization (lab 11 reference)
+  while (!Serial) continue;
+  delay(1000);
+
+  lineSensors.initFiveSensors();
+
+  // Initialize servo
+  servo.attach(5);
+  servo.write(90);  // Turn head left
+
+  //seed RNG for diverse particles.
+  randomSeed(analogRead(A0));  
+ 
+  float origin[2] = {0.0, 0.0};
+  theta = 0.0f;
+  float closestDist = myMap.closest_distance(origin, theta);
+  Serial.println("Map test distance:");
+  Serial.println(closestDist);
+  
+  Serial.println("Starting autonomous localization...");
+  delay(2000);
+
 }
 
 //-------------------------- Main control loop --------------------------//
-// TODO: Implement correct behavior depending on switch case.
 void loop() {
 
-  // Select Action
+  // 1) Update localization.
+  updateLocalization();
+
+  // 2) Choose action.
   switch(currentMode){
-    case WALL_FOLLOW:
-      wallFollow();
+    case MOVE_FORWARD:
+      move_forward();
+      break;
+    case TURN_LEFT:
+      turn_left();
+      break;
+    case TURN_RIGHT:
+      turn_right();
+      break;
+    case REVERSE:
+      reverse();
       break;
     case AT_GOAL:
-      handleGoal();
+      at_goal();
       break;
-    case AT_CORNER:
-      atCorner();
-      break;
-    case OBSTACLE_AVOID:
-      obstacleAvoid();
+    case STOP:
+      stop();
       break;
   }
 
 }
 
 // -------------------------------------------- Core Behaviors --------------------------------------//
+//
+void reverseFullPath() {
+    Serial.println("Reversing path to dock...");
 
-// Update all sensor readings and global variables
-void updateSensors() {
-  // TODO???: Example: update IR, sonar, bumper readings, etc.
+    for (int i = PATH_SIZE - 1; i >= 0; i--) {
+        Point target = fullPath[i];
+
+        Serial.print("Returning to cell (");
+        Serial.print(target.x);
+        Serial.print(",");
+        Serial.print(target.y);
+        Serial.println(")");
+        // Move robot to target if desired
+        motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+        delay(500);
+        motors.setSpeeds(0, 0);
+        delay(200); // Placeholder for movement
+    }
+    Serial.println("Reverse of path complete.");
 }
 
-//
+/*
 void atCorner() {
   motors.setSpeeds(0, 0);  // Stop
   delay(500);
@@ -131,11 +180,15 @@ void turnBody() {
   motors.setSpeeds(0, 0);
   delay(200);  
 }
-
+*/
 
 // Run localization step (particle filter, odometry, etc.)
+// Mark the coordinate we are at.
 // TODO: Sanity check localization through simulation of some sort.
 void updateLocalization() {
+  // Calculate the distance.
+  CalculateDistance();
+
   // Localization update
   float dx = x - x_last;
   float dy = y - y_last;
@@ -144,17 +197,32 @@ void updateLocalization() {
 
   //Measaure, estimation, and resample
   particle.measure();
-  particle.print_particles();
+  //particle.print_particles();
 
-  // Mark visited state in map
-  map.visited((int)x, (int)y);
+  // Convert physical coordinates to cell indices for the map
+  int cell_x = (int)(x / 20.0);
+  int cell_y = (int)(y / 20.0);
 
-  // Check for goals and docking station
-  if (map.atGoalLocation((int)x, (int)y)) {
-    // Handle goal logic (e.g., set mode, log, etc.)
+  // Mark visit
+  myMap.visited(cell_x, cell_y);
+
+  // ===== GOAL LOGIC =====
+  if (myMap.atGoalLocation(cell_x, cell_y)) {
+    currentMode = AT_GOAL;
+
+        // If at the final goal coordinate of (2,1), trigger reversal
+    if (cell_x == 2 && cell_y == 1) {
+      Serial.println("Final goal reached. Reversing path now.");
+      reverseFullPath();  // Call your reversal function
+      currentMode = STOP; // stop after reversing
+    }
   }
-  if (map.atDockingStation((int)x, (int)y)) {
-    // Handle docking logic (e.g., stop, log, etc.)
+    else {
+      Mode turn = myMap.cornerDetected(cell_x, cell_y);
+      if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
+      else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
+      else if (turn == REVERSE)     currentMode = REVERSE;
+      else                          currentMode = MOVE_FORWARD;
   }
 
   //save last odometer reading
@@ -163,8 +231,89 @@ void updateLocalization() {
   theta_last = theta;
 }
 
+// Odometry & distance calculation
+void CalculateDistance() {
+  deltaL = encoders.getCountsAndResetLeft();
+  deltaR = encoders.getCountsAndResetRight();
+  encCountsLeft += deltaL;
+  encCountsRight += deltaR;
+  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
+}
+
+// Movement Primitive
+void move_forward() {
+  Serial.println("MOVE_FORWARD");
+  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+  delay(500);  // Move forward for 500ms
+  motors.setSpeeds(0, 0);
+  delay(100);
+}
+
+void turn_left() {
+  Serial.println("TURN_LEFT");
+  float target_theta = wrapPi(theta + (PI / 2.0));  // +90 degrees
+  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.1) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void turn_right() {
+  Serial.println("TURN_RIGHT");
+  float target_theta = wrapPi(theta - (PI / 2.0));  // -90 degrees
+  motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.1) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void reverse() {
+  Serial.println("REVERSE (180° turn)");
+  // Turn 180 degrees
+  float target_theta = wrapPi(theta + PI);
+  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.2) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void at_goal() {
+  Serial.println("AT_GOAL - Goal location reached!");
+  motors.setSpeeds(0, 0);
+  delay(1000);
+  
+  // Continue traversing
+  currentMode = MOVE_FORWARD;
+}
+
+void stop() {
+  Serial.println("=== STOP - Traversal Complete ===");
+  motors.setSpeeds(0, 0);
+  
+  // Beep to signal completion
+  buzzer.playFrequency(880, 500, 15);
+  
+  // Stop forever
+  while(true) {
+    delay(1000);
+  }
+}
+
+
 // -------------------------------------Past Lab Functions just in case. -------------------------------------//
-void wallFollow() {
+/*void wallFollow() {
   wallDist = sonar.readDist();
 
   if (wallDist <= 0) {
@@ -185,7 +334,7 @@ void wallFollow() {
     currentMode = AT_GOAL;  // Trigger pick sequence
     return;
   }  
-  */
+  
 
   PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
 
@@ -197,15 +346,15 @@ void wallFollow() {
   int current_x = (int)(x / 20.0);  // x in cm / 20cm per cell
   int current_y = (int)(y / 20.0);  // y in cm / 20cm per cell
   
-  if (map.cornerDetected(current_x, current_y)) {
+  if (myMap.cornerDetected(current_x, current_y)) {
     currentMode = AT_CORNER;
   }
 
   // Check for goal arrival
-  if (map.atGoalLocation((int)x, (int)y)) {
+  if (myMap.atGoalLocation((int)x, (int)y)) {
     currentMode = AT_GOAL;
   }
-}
+}*/
 
 bool detectWhiteLine(){
   lineSensors.read(lineDetectionValues);
@@ -280,12 +429,3 @@ void spin360() {
   motors.setSpeeds(0, 0);
   delay(300);
 }*/
-
-// Odometry & distance calculation
-void CalculateDistance() {
-  deltaL = encoders.getCountsAndResetLeft();
-  deltaR = encoders.getCountsAndResetRight();
-  encCountsLeft += deltaL;
-  encCountsRight += deltaR;
-  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
-}
