@@ -4,7 +4,7 @@ using namespace Pololu3piPlus32U4;
 #include "odometry.h"
 #include "Map.h"
 #include "sonar.h"
-//#include "PIDcontroller.h"
+//#include "PIDcontroller. h"
 #include <Gaussian.h>
 #include <ArduinoJson.h>
 #include <Servo.h>
@@ -65,8 +65,28 @@ long deltaL = 0, deltaR = 0;
 unsigned int lineDetectionValues[5];
 
 // Mode/state machine
-// Start at move forward
 Mode currentMode = MOVE_FORWARD;
+
+// Wall following state
+enum WallFollowState { LEFT_WALL, RIGHT_WALL, RETURNING_TO_START };
+WallFollowState wallFollowState = LEFT_WALL;
+
+// Coordinate-based turn mapping for left wall following
+struct TurnPoint {
+  int x;
+  int y;
+  int turnDegrees;  // 90 or 180
+};
+
+const TurnPoint leftWallTurns[] = {
+  {5, 1, 90},
+  {6, 1, 90},
+  {7, 2, 180},
+  {4, 2, 90},
+  {1, 2, 90},
+  {1, 0, 180}
+};
+const int leftWallTurnsSize = 6;
 
 // wrapPi function
 static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
@@ -77,18 +97,97 @@ void setup() {
   servo.attach(5);
   servo.write(180);
   delay(40);
-
 }
 
 //-------------------------- Main control loop --------------------------//
 void loop() {
-
-  wallFollow();
-
+  wallFollowWithTurns();
 }
 
 // -------------------------------------------- Core Behaviors --------------------------------------//
-//
+
+void wallFollowWithTurns() {
+  // Update odometry
+  CalculateDistance();
+  
+  // Get current cell coordinates
+  int current_x = (int)(x / 20.0);  // x in cm / 20cm per cell
+  int current_y = (int)(y / 20.0);  // y in cm / 20cm per cell
+  
+  Serial.print("Position: (");
+  Serial.print(current_x);
+  Serial.print(",");
+  Serial.print(current_y);
+  Serial.print(") State: ");
+  Serial.println(wallFollowState);
+  
+  if (wallFollowState == LEFT_WALL) {
+    // Check for turns at specific coordinates
+    for (int i = 0; i < leftWallTurnsSize; i++) {
+      if (current_x == leftWallTurns[i].x && current_y == leftWallTurns[i].y) {
+        if (leftWallTurns[i].turnDegrees == 90) {
+          turn_left();
+        } else if (leftWallTurns[i].turnDegrees == 180) {
+          reverse();
+        }
+        delay(300);
+        return;  // Skip wall following this cycle after turn
+      }
+    }
+    
+    // Check if we reached the goal
+    if (current_x == 2 && current_y == 1) {
+      Serial.println("GOAL REACHED! Switching to right wall following...");
+      reverse();  // 180 degree turn
+      wallFollowState = RIGHT_WALL;
+      delay(300);
+      return;
+    }
+    
+    // Left wall following
+    wallFollowLeft();
+    
+  } else if (wallFollowState == RIGHT_WALL) {
+    // Right wall following to return to start
+    wallFollowRight();
+    
+    // Check if we've returned to start (0,0)
+    if (current_x == 0 && current_y == 0) {
+      Serial.println("RETURNED TO START!");
+      stop();
+    }
+  }
+}
+
+void wallFollowLeft() {
+  // Left wall following - sonar on left side
+  wallDist = sonar.readDist();
+  PDout = PDcontroller.update(wallDist, distFromWall);
+  
+  int leftCmd  = (int)(BASE_SPEED + PDout);
+  int rightCmd = (int)(BASE_SPEED - PDout);
+  
+  leftCmd  = constrain(leftCmd,  -400, 400);
+  rightCmd = constrain(rightCmd, -400, 400);
+  
+  motors.setSpeeds(leftCmd, rightCmd);
+}
+
+void wallFollowRight() {
+  // Right wall following - sonar on right side
+  // For right wall following, reverse the PD output logic
+  wallDist = sonar.readDist();
+  PDout = PDcontroller.update(wallDist, distFromWall);
+  
+  int leftCmd  = (int)(BASE_SPEED - PDout);
+  int rightCmd = (int)(BASE_SPEED + PDout);
+  
+  leftCmd  = constrain(leftCmd,  -400, 400);
+  rightCmd = constrain(rightCmd, -400, 400);
+  
+  motors.setSpeeds(leftCmd, rightCmd);
+}
+
 void reverseFullPath() {
     Serial.println("Reversing path to dock...");
 
@@ -109,35 +208,6 @@ void reverseFullPath() {
     Serial.println("Reverse of path complete.");
 }
 
-/*
-void atCorner() {
-  motors.setSpeeds(0, 0);  // Stop
-  delay(500);
-  
-  turnBody();  // Call your existing turnBody function
-  
-  currentMode = WALL_FOLLOW;  // Resume wall following
-}
-
-void turnBody() {
-  // TODO: Turn the body accordingly when we hit a corner or obstacle.
-
-  float start_theta = theta;
-  float target_theta = start_theta - (PI / 2.0);  // -90 degrees
-  
-  // Turn in place (left forward, right backward)
-  motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
-  
-  while (abs(theta - target_theta) > 0.1) {
-    CalculateDistance();  // Update odometry
-    delay(10);
-  }
-  
-  motors.setSpeeds(0, 0);
-  delay(200);  
-}
-*/
-
 // Odometry & distance calculation
 void CalculateDistance() {
   deltaL = encoders.getCountsAndResetLeft();
@@ -148,7 +218,7 @@ void CalculateDistance() {
 }
 
 void turn_left() {
-  Serial.println("TURN_LEFT");
+  Serial.println("TURN_LEFT (90°)");
   float target_theta = wrapPi(theta + (PI / 2.0));  // +90 degrees
   motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
   
@@ -161,7 +231,7 @@ void turn_left() {
 }
 
 void turn_right() {
-  Serial.println("TURN_RIGHT");
+  Serial.println("TURN_RIGHT (90°)");
   float target_theta = wrapPi(theta - (PI / 2.0));  // -90 degrees
   motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
   
@@ -191,143 +261,8 @@ void stop() {
   Serial.println("=== STOP - Traversal Complete ===");
   motors.setSpeeds(0, 0);
   
-  // Beep to signal completion
-  //buzzer.playFrequency(880, 500, 15);
-  
   // Stop forever
   while(true) {
     delay(1000);
   }
 }
-
-
-// -------------------------------------Past Lab Functions just in case. -------------------------------------//
-void wallFollow() {
-    //DO NOTE DELETE CODE AFTER EACH TASK, COMMENT OUT INSTEAD
-  wallDist = sonar.readDist();
-
-
-  //UNCOMMENT AFTER IMPLEMENTING PDcontroller
-  PDout = PDcontroller.update(wallDist, distFromWall); //uncomment if using PDcontroller 
-
-  //(LAB 5 - TASK 3.1) IMPLEMENT PDCONTROLLER 
-  
-  /*FIRST GO TO PDcontroller.h AND ADD PRIVATE VARIABLES NEEDED.
-    THEN GO TO PDcontroller.cpp AND COMPLETE THE update FUNCTION.
-    ONCE YOU IMPLEMENT update, UNCOMMENT CODE ABOVE TO USE CONTROLLER.*/
-
-  //(LAB 5 - TASK 3.2) PDCONTROLLER WALL FOLLOWING
-  int leftCmd  = (int)(BASE_SPEED + PDout);
-  int rightCmd = (int)(BASE_SPEED - PDout);
-
-  /*NOW THAT YOU HAVE IMPLEMENTED PDCONTROLLER, TAKE THE OUTPUT FROM PDout
-  AND SET THE MOTOR SPEEDS. CHANGE THE KP, KD, AND CLAMPING VALUES AT THE TOP
-  TO TEST (B-D).
-  Hint: Also use baseSpeed when setting motor speeds*/
-  leftCmd  = constrain(leftCmd,  -400, 400);
-  rightCmd = constrain(rightCmd, -400, 400);
-
-  motors.setSpeeds(leftCmd, rightCmd);
-}
-
-  /*
-  // Check for black square (pick bin - Phase 3, B1/B2)
-  if (detectBlackSquare()) {
-    currentMode = AT_GOAL;  // Trigger pick sequence
-    return;
-  }  
-  
-
-  PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
-
-  int16_t left = constrain(BASE_SPEED - PDout, -400, 400);
-  int16_t right = constrain(BASE_SPEED + PDout, -400, 400);
-
-  motors.setSpeeds(left, right);
-
-  int current_x = (int)(x / 20.0);  // x in cm / 20cm per cell
-  int current_y = (int)(y / 20.0);  // y in cm / 20cm per cell
-  
-  if (myMap.cornerDetected(current_x, current_y)) {
-    currentMode = AT_CORNER;
-  }
-
-  // Check for goal arrival
-  if (myMap.atGoalLocation((int)x, (int)y)) {
-    currentMode = AT_GOAL;
-  }
-}*/
-
-/*bool detectWhiteLine(){
-  lineSensors.read(lineDetectionValues);
-
-  const int whiteThreshold = 1500;
-  int whiteCount = 0;
-
-  for (int i = 0; i < 5; i++) {
-    if (lineDetectionValues[i] < whiteThreshold) {
-      whiteCount++;
-    }
-  }
-  return (whiteCount >= 2);
-}*/
-
-/*B1 and B2 Code
-bool detectBlackSquare(){
-  lineSensors.read(lineDetectionValues);
-
-  const int blackThreshold = 1500;
-  int blackCount = 0;
-
-  for (int i = 0; i < 5; i++) {
-    if (lineDetectionValues[i] > blackThreshold) {
-      blackCount++;
-    }
-  }
-  return (blackCount >= 2);
-}
-
-void collectBin() {
-  Serial.println("BIN DETECTED!");
-  
-  // Stop
-  motors.setSpeeds(0, 0);
-  delay(500);
-  
-  // Spin 360
-  spin360();
-  
-  // Update counter
-  binCount++;
-  
-  // Flash LED
-  for (int i = 0; i < 3; i++) {
-    ledYellow(1);
-    delay(100);
-    ledYellow(0);
-    delay(100);
-  }
-  
-  // Beep
-  buzzer.playFrequency(880, 200, 15);
-  
-  Serial.print("Collected bin #");
-  Serial.println(binCount);
-  
-  delay(500);
-}
-
-// ===== 360 SPIN =====
-void spin360() {
-  display.clear();
-  display.print("Spin!");
-  
-  // Time for 360-degree rotation
-  // Wheelbase = 9.7cm, circumference = pi * 9.7 = 30.5cm
-  // At speed 120, roughly 3-4 seconds for 360
-  motors.setSpeeds(120, -120);
-  delay(3200);  // Adjust this based on testing
-  
-  motors.setSpeeds(0, 0);
-  delay(300);
-}*/
