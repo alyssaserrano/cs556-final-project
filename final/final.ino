@@ -108,12 +108,18 @@ void loop() {
       break;
     case TURN_LEFT:
       turn_left();
+      motors.setSpeeds(0, 0);
+      delay(100);
       break;
     case TURN_RIGHT:
       turn_right();
+      motors.setSpeeds(0, 0);
+      delay(100);
       break;
     case REVERSE:
       reverse();
+      motors.setSpeeds(0, 0);
+      delay(100);
       break;
     case AT_GOAL:
       at_goal();
