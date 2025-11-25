@@ -63,7 +63,8 @@ void ParticleFilter::move_particles(float dx, float dy, float dtheta){
 }
 
 void ParticleFilter::measure(){
-  const float grid_scale_cm = (_lenOfMap / 3.0f);
+  // Changed to be in coordinate's units (20 cm per cell.)
+  const float grid_scale_cm = 20.0;
   const float z_meas = _sonar.readDist();
   float maxlog = -1e30f;
 

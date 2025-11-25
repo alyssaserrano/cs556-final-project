@@ -8,16 +8,16 @@ to any line segment within a predefined set of segments (maps array).
 
 #include "Map.h"
 #include <math.h>
+
+// --- Grid dimension defines ---
+#define MAP_WIDTH 9      // 180cm / 20cm
+#define MAP_HEIGHT 4     // 80cm / 20cm
+
 //DynamicJsonDocument doc(400);
 float none[2] = {-1.0,-1.0};
 static float res[2]; 
 
 const int PATH_SIZE = 36;
-
-struct Point {
-    int x;
-    int y;
-};
 
 const Point fullPath[PATH_SIZE] = {
     {0,0}, {0,1}, {0,2}, {0,3},
@@ -49,12 +49,16 @@ const int goalPositions[3][2] = { {6,2}, {8,0}, {2,1} };
 Map::Map(){}
 
 // Check if at corner location
-bool Map::cornerDetected(int x, int y){
-  // TODO: Indicate what locations are corners (do this on sim first then implement on hardware.)
-  if (x == 1 && y == 3) return true;  // Left side lower corner
-  if (x == 1 && y == 1) return true;  // Left side upper corner
-  if (x == 4 && y == 2) return true;  // Middle turn
-  if (x == 7 && y == 1) return true;  // Right side turn
+Mode Map::cornerDetected(int x, int y) {
+  if (x == 0 && y == 3)   return TURN_LEFT;
+  if (x == 1 && y == 2)   return TURN_RIGHT;
+  if (x == 4 && y == 2)   return TURN_RIGHT;
+  if (x == 5 && y == 1)   return TURN_RIGHT;
+  if (x == 6 && y == 1)   return TURN_RIGHT;
+  if (x == 4 && y == 0)   return TURN_LEFT;
+  if (x == 1 && y == 0)   return REVERSE;
+  if (x == 7 && y == 2)   return REVERSE;
+  return NONE;
 }
 
 // Check if at goal location
@@ -84,7 +88,7 @@ void Map::visited(int x, int y){
   if (isTraversable(x, y)) {
     visitArray[x][y] += 1;     // Mark as visited (count visits)
     logWaypoint(x, y);
-    if (atDockingStation(x, y)) {
+    /*if (atDockingStation(x, y)) {
       Serial.print("At docking station (");
       Serial.print(x);
       Serial.print(",");
@@ -97,7 +101,7 @@ void Map::visited(int x, int y){
       Serial.print(",");
       Serial.print(y);
       Serial.println(")");
-    }
+    }*/
   }
 }
 
