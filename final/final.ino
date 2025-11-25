@@ -145,7 +145,7 @@ void wallFollow() {
     return;
   }
 
-  PDout = pd_obs.update(wallDist, distFromWall);
+  PDout = (int)pd_obs.update(wallDist, distFromWall);
 
   // Get left and right wheel speeds using the base speed and PD controller output
   int16_t lSpeed = pd_obs.leftWheel(BASE_SPEED, PDout);
