@@ -134,20 +134,26 @@ void loop() {
 // -------------------------------------------- Core Behaviors --------------------------------------//
 //
 void reverseFullPath() {
-    Serial.println("Reversing hardcoded fullPath:");
+    Serial.println("Reversing path to dock...");
+
     for (int i = PATH_SIZE - 1; i >= 0; i--) {
         Point target = fullPath[i];
+
         Serial.print("Returning to cell (");
         Serial.print(target.x);
         Serial.print(",");
         Serial.print(target.y);
         Serial.println(")");
         // Move robot to target if desired
+        motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+        delay(500);
+        motors.setSpeeds(0, 0);
         delay(200); // Placeholder for movement
     }
     Serial.println("Reverse of path complete.");
 }
 
+/*
 void atCorner() {
   motors.setSpeeds(0, 0);  // Stop
   delay(500);
@@ -174,7 +180,7 @@ void turnBody() {
   motors.setSpeeds(0, 0);
   delay(200);  
 }
-
+*/
 
 // Run localization step (particle filter, odometry, etc.)
 // Mark the coordinate we are at.
@@ -215,11 +221,11 @@ void updateLocalization() {
     }
   }
     else {
-    Mode turn = myMap.cornerDetected(cell_x, cell_y);
-    if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
-    else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
-    else if (turn == REVERSE)     currentMode = REVERSE;
-    else                          currentMode = MOVE_FORWARD;
+      //Mode turn = myMap.cornerDetected(cell_x, cell_y);
+      if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
+      else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
+      else if (turn == REVERSE)     currentMode = REVERSE;
+      else                          currentMode = MOVE_FORWARD;
   }
 
   //save last odometer reading
@@ -235,6 +241,77 @@ void CalculateDistance() {
   encCountsLeft += deltaL;
   encCountsRight += deltaR;
   odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
+}
+
+// Movement Primitive
+void move_forward() {
+  Serial.println("MOVE_FORWARD");
+  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+  delay(500);  // Move forward for 500ms
+  motors.setSpeeds(0, 0);
+  delay(100);
+}
+
+void turn_left() {
+  Serial.println("TURN_LEFT");
+  float target_theta = wrapPi(theta + (PI / 2.0));  // +90 degrees
+  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.1) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void turn_right() {
+  Serial.println("TURN_RIGHT");
+  float target_theta = wrapPi(theta - (PI / 2.0));  // -90 degrees
+  motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.1) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void reverse() {
+  Serial.println("REVERSE (180° turn)");
+  // Turn 180 degrees
+  float target_theta = wrapPi(theta + PI);
+  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
+  
+  while (abs(wrapPi(theta - target_theta)) > 0.2) {
+    CalculateDistance();
+    delay(10);
+  }
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void at_goal() {
+  Serial.println("AT_GOAL - Goal location reached!");
+  motors.setSpeeds(0, 0);
+  delay(1000);
+  
+  // Continue traversing
+  currentMode = MOVE_FORWARD;
+}
+
+void stop() {
+  Serial.println("=== STOP - Traversal Complete ===");
+  motors.setSpeeds(0, 0);
+  
+  // Beep to signal completion
+  buzzer.playFrequency(880, 500, 15);
+  
+  // Stop forever
+  while(true) {
+    delay(1000);
+  }
 }
 
 
