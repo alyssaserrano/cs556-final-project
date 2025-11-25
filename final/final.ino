@@ -148,9 +148,8 @@ void wallFollow() {
   PDout = pd_obs.update(wallDist, distFromWall);
 
   // Get left and right wheel speeds using the base speed and PD controller output
-  // Use negative for power input due to different in calculations for line following vs. wall following
-  int16_t lSpeed = pd_obs.leftWheel(BASE_SPEED, -PDout);
-  int16_t rSpeed = pd_obs.rightWheel(BASE_SPEED, -PDout);
+  int16_t lSpeed = pd_obs.leftWheel(BASE_SPEED, PDout);
+  int16_t rSpeed = pd_obs.rightWheel(BASE_SPEED, PDout);
 
   // Set each motor power
   motors.setSpeeds(lSpeed, rSpeed);
