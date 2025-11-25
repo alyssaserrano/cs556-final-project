@@ -67,8 +67,8 @@ long deltaL = 0, deltaR = 0;
 unsigned int lineDetectionValues[5];
 
 // Mode/state machine
-// Start at move forward
-Mode currentMode = MOVE_FORWARD;
+// Start at wall follow
+Mode currentMode = WALL_FOLLOW;
 
 // wrapPi function
 static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
@@ -103,6 +103,9 @@ void loop() {
 
   // 2) Choose action.
   switch(currentMode){
+    case WALL_FOLLOW:
+      wallFollow();
+      break;
     case MOVE_FORWARD:
       move_forward();
       break;
@@ -133,6 +136,26 @@ void loop() {
 
 // -------------------------------------------- Core Behaviors --------------------------------------//
 //
+void wallFollow() {
+  wallDist = sonar.readDist();
+
+  if (wallDist <= 0) {
+    // Sensor failed: slow forward
+    motors.setSpeeds(BASE_SPEED, BASE_SPEED);
+    return;
+  }
+
+  PDout = pd_obs.update(wallDist, distFromWall);
+
+  // Get left and right wheel speeds using the base speed and PD controller output
+  // Use negative for power input due to different in calculations for line following vs. wall following
+  int16_t lSpeed = pd_obs.leftWheel(BASE_SPEED, -PDout);
+  int16_t rSpeed = pd_obs.rightWheel(BASE_SPEED, -PDout);
+
+  // Set each motor power
+  motors.setSpeeds(lSpeed, rSpeed);
+}
+
 void reverseFullPath() {
     Serial.println("Reversing path to dock...");
 

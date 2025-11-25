@@ -6,7 +6,7 @@ struct Point { int x; int y; };
 extern const int PATH_SIZE;     
 extern const Point fullPath[];
 
-enum Mode { MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, AT_GOAL, REVERSE, STOP, NONE };
+enum Mode { MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, AT_GOAL, REVERSE, STOP, WALL_FOLLOW, NONE };
 
 class Map{
   public:

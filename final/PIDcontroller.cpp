@@ -45,3 +45,11 @@ double PIDcontroller::update(double value, double target_value){
 
   return _clampOut;
 }
+
+int16_t PIDcontroller::leftWheel(int baseSpeed, int pdOutput) {
+  return constrain(baseSpeed + pdOutput, -400, 400);
+}
+
+int16_t PIDcontroller::rightWheel(int baseSpeed, int pdOutput) {
+  return constrain(baseSpeed - pdOutput, -400, 400);
+}
