@@ -206,6 +206,9 @@ void updateLocalization() {
   // Mark visit
   myMap.visited(cell_x, cell_y);
 
+  // Decide on mode (special cell action or move forward)
+  Mode turn = myMap.cornerDetected(cell_x, cell_y);
+
   // ===== GOAL LOGIC =====
   if (myMap.atGoalLocation(cell_x, cell_y)) {
     currentMode = AT_GOAL;
@@ -218,7 +221,7 @@ void updateLocalization() {
     }
   }
     else {
-      Mode turn = myMap.cornerDetected(cell_x, cell_y);
+      //Mode turn = myMap.cornerDetected(cell_x, cell_y);
       if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
       else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
       else if (turn == REVERSE)     currentMode = REVERSE;
