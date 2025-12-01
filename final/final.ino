@@ -1,19 +1,13 @@
 #include <Pololu3piPlus32U4.h>
 #include <Pololu3piPlus32U4Buttons.h>
 using namespace Pololu3piPlus32U4;
-#include "particle_filter.h"
 #include "odometry.h"
-#include "Map.h"
 #include "sonar.h"
 #include "PIDcontroller.h"
-#include <Gaussian.h>
-#include <ArduinoJson.h>
 #include <Servo.h>
 
-// ----------------- Set up ----------------------------------------//
-// Constants and Parameters
+// ====================== CONSTANTS AND PARAMETERS ======================
 #define WALL_DIST 20     // Desired distance from wall in cm
-#define OBSTACLE_THRESH 15 // Threshold for obstacle (cm)
 #define BASE_SPEED 120
 #define FAST_SPEED 250  // Speed on white line
 
@@ -24,341 +18,343 @@ using namespace Pololu3piPlus32U4;
 #define w 9.6
 #define gearRatio 75
 
-// Particle filter
-#define lenOfMap 60 //60 cm / 3 = 20 cm per grid unit (matches the map).
-#define N_particles 20
-#define move_noise   0.01   // σ_d^2
-#define rotate_noise 0.05   // σ_θ^2
-#define ultra_noise  0.10   // σ_s^2
+// Phase 3: Pick Detection
+#define BLACK_THRESHOLD 500  // Adjust based on your IR sensor readings
+#define TARGET_PICKS 3
 
-// Hardware objects
+// ====================== HARDWARE OBJECTS ======================
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
-PIDcontroller pd_obs(0.6, 0.03, 0.25, -100.0, 100.0, 1.0);
+PIDcontroller PDcontroller(0.6, 0.03, 0.25, -100.0, 100. 0, 1.0);  // For wall following
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
-LineSensors lineSensors;
 OLED display;
-
-// Map object
-Map myMap;
 
 // Servo
 Servo servo;
 
-// Particle filter
-ParticleFilter particle(myMap, lenOfMap, N_particles, move_noise, rotate_noise, ultra_noise);
-
-// State variables
+// ====================== STATE VARIABLES ======================
 float wallDist;
 float distFromWall = WALL_DIST;
-int PDout = 0;
-bool is_localized = false;
-int movement_cycles = 0;
+
 int currentSpeed = BASE_SPEED;
 
-// Odometry tracking
+/* Odometry tracking
 float x = 0, y = 0, theta = 0;
 float x_last = 0, y_last = 0, theta_last = 0;
 long encCountsLeft = 0, encCountsRight = 0;
-long deltaL = 0, deltaR = 0;
+long deltaL = 0, deltaR = 0;*/
 
-//Sensor readings
-unsigned int lineDetectionValues[5];
+// ====================== SEGMENT TRACKING ======================
+int pickCount = 0;
+int executedSegments[50];  
+int segmentCount = 0;      
 
-// Mode/state machine
-// Start at move forward
-Mode currentMode = MOVE_FORWARD;
+enum SegmentType {
+  WALL_FOLLOW_LEFT,
+  WALL_FOLLOW_RIGHT,
+  LEFT_TURN,
+  RIGHT_TURN,
+  U_TURN
+};
 
-// wrapPi function
-static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
+struct Segment {
+  SegmentType type;
+  float distance;
+};
 
-// Setup all hardware and subsystems
+// Define all forward segments
+Segment forwardPath[] = {
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 100},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {U_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 60},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {U_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20}
+};
+
+const int NUM_SEGMENTS = 33;
+
+// ====================== SETUP ======================
 void setup() {
   Serial.begin(9600);
-
-  // For localization (lab 11 reference)
-      while (!Serial) continue;
-    delay(1000);
-
-  //seed RNG for diverse particles.
-  randomSeed(analogRead(A0));  
- 
-  float origin[2] = {0.0, 0.0};
-  theta = 0.0f;
-  float closestDist = myMap.closest_distance(origin, theta);
-  Serial.println("Map test distance:");
-  Serial.println(closestDist);
-  
-  Serial.println("Starting autonomous localization...");
   delay(2000);
-
 }
 
-//-------------------------- Main control loop --------------------------//
+// ====================== MAIN CONTROL LOOP ======================
 void loop() {
+  Serial.println("Starting FORWARD path...");
+  
+  // ===== FORWARD PATH =====
+  for (int i = 0; i < NUM_SEGMENTS && pickCount < TARGET_PICKS; i++) {
+    execute_segment(forwardPath[i]);
+    executedSegments[segmentCount] = i;
+    segmentCount++;
+    
+    Serial.print("Executed segment ");
+    Serial.print(i);
+    Serial.print(" | Picks: ");
+    Serial.println(pickCount);
+  }
+  
+  // ===== ONCE 3 PICKS FOUND, REVERSE =====
+  if (pickCount == TARGET_PICKS) {
+    Serial.println("All 3 picks found!     Turning 180.. .");
+    delay(1000);
+    uTurn();
+    delay(1000);
+    
+    Serial.println("Starting REVERSE path...");
+    
+    // Execute stored segments in REVERSE order with SWAPPED turns
+    for (int i = segmentCount - 1; i >= 0; i--) {
+      Segment seg = forwardPath[executedSegments[i]];
+      execute_segment_reversed(seg);
+    }
+    
+    Serial.println("===== MISSION COMPLETE!  =====");
+    while(1);
+  }
+}
 
-  // 1) Update localization.
-  updateLocalization();
-
-  // 2) Choose action.
-  switch(currentMode){
-    case MOVE_FORWARD:
-      move_forward();
+// ====================== SEGMENT EXECUTION ======================
+void execute_segment(Segment seg) {
+  switch (seg.type) {
+    case WALL_FOLLOW_LEFT:
+      wallFollowLeft(seg.distance);
       break;
-    case TURN_LEFT:
-      turn_left();
-      motors.setSpeeds(0, 0);
-      delay(100);
+    
+    case WALL_FOLLOW_RIGHT:
+      wallFollowRight(seg.distance);
       break;
-    case TURN_RIGHT:
-      turn_right();
-      motors.setSpeeds(0, 0);
-      delay(100);
+    
+    case LEFT_TURN:
+      leftTurn();
       break;
-    case REVERSE:
-      reverse();
-      motors.setSpeeds(0, 0);
-      delay(100);
+    
+    case RIGHT_TURN:
+      rightTurn();
       break;
-    case AT_GOAL:
-      at_goal();
-      break;
-    case STOP:
-      stop();
+    
+    case U_TURN:
+      uTurn();
       break;
   }
-
 }
 
-// -------------------------------------------- Core Behaviors --------------------------------------//
-//
-void reverseFullPath() {
-    Serial.println("Reversing path to dock...");
+void execute_segment_reversed(Segment seg) {
+  // Swap left/right walls AND left/right turns! 
+  switch (seg.type) {
+    case WALL_FOLLOW_LEFT:
+      wallFollowRight(seg.distance);
+      break;
+    
+    case WALL_FOLLOW_RIGHT:
+      wallFollowLeft(seg.distance);
+      break;
+    
+    case LEFT_TURN:
+      rightTurn();
+      break;
+    
+    case RIGHT_TURN:
+      leftTurn();
+      break;
+    
+    case U_TURN:
+      uTurn();
+      break;
+  }
+}
 
-    for (int i = PATH_SIZE - 1; i >= 0; i--) {
-        Point target = fullPath[i];
-
-        Serial.print("Returning to cell (");
-        Serial.print(target.x);
-        Serial.print(",");
-        Serial.print(target.y);
-        Serial.println(")");
-        // Move robot to target if desired
-        motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-        delay(500);
-        motors.setSpeeds(0, 0);
-        delay(200); // Placeholder for movement
+// ====================== WALL FOLLOWING WITH INTEGRATED PICK DETECTION ======================
+void wallFollowLeft(float targetDistance) {
+  Serial.print("Wall follow LEFT for ");
+  Serial.print(targetDistance);
+  Serial. println("cm");
+  
+  encoders.getCountsAndResetLeft();
+  encoders.getCountsAndResetRight();
+  float distanceTraveled = 0;
+  int16_t leftTotal = 0;
+  int16_t rightTotal = 0;
+  
+  while(distanceTraveled < targetDistance) {
+    deltaL = encoders.getCountsAndResetLeft();
+    deltaR = encoders. getCountsAndResetRight();
+    leftTotal += deltaL;
+    rightTotal += deltaR;
+    
+    float countsPerRev = nL * gearRatio;
+    float distPerCount = (PI * diaL) / countsPerRev;
+    float avgCounts = (leftTotal + rightTotal) / 2.0;
+    distanceTraveled = avgCounts * distPerCount;
+    
+    wallDist = sonar.readDist();
+    Serial.println(wallDist);
+    int POut = (int)PDcontroller.update(wallDist, distFromWall);
+    motors.setSpeeds(int(BASE_SPEED + POut), int(BASE_SPEED - POut));
+    
+    // CHECK FOR BLACK SQUARE DURING TRAVERSAL - PICK BUT CONTINUE
+    if (pickCount < TARGET_PICKS && IR_sensor_detects_black_square()) {
+      Serial.println("BLACK SQUARE DETECTED!     Picking.. .");
+      motors.setSpeeds(0, 0);
+      delay(100);
+      
+      // 360° alignment spin
+      motors.setSpeeds(50, -50);
+      delay(3600);
+      motors.setSpeeds(0, 0);
+      delay(200);
+      
+      pickCount++;
+      display. clear();
+      display.print("Picks: ");
+      display.print(pickCount);
+      flash_led();
+      
+      delay(500);
+      
+      // RESET ENCODERS and CONTINUE until targetDistance is reached
+      encoders.getCountsAndResetLeft();
+      encoders.getCountsAndResetRight();
+      leftTotal = 0;
+      rightTotal = 0;
+      distanceTraveled = 0;
     }
-    Serial.println("Reverse of path complete.");
-}
-
-/*
-void atCorner() {
-  motors.setSpeeds(0, 0);  // Stop
-  delay(500);
-  
-  turnBody();  // Call your existing turnBody function
-  
-  currentMode = WALL_FOLLOW;  // Resume wall following
-}
-
-void turnBody() {
-  // TODO: Turn the body accordingly when we hit a corner or obstacle.
-
-  float start_theta = theta;
-  float target_theta = start_theta - (PI / 2.0);  // -90 degrees
-  
-  // Turn in place (left forward, right backward)
-  motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
-  
-  while (abs(theta - target_theta) > 0.1) {
-    CalculateDistance();  // Update odometry
-    delay(10);
   }
   
   motors.setSpeeds(0, 0);
-  delay(200);  
 }
-*/
 
-// Run localization step (particle filter, odometry, etc.)
-// Mark the coordinate we are at.
-// TODO: Sanity check localization through simulation of some sort.
-void updateLocalization() {
-  // Calculate the distance.
-  CalculateDistance();
-
-  // Localization update
-  float dx = x - x_last;
-  float dy = y - y_last;
-  float dtheta = wrapPi(theta - theta_last);
-  particle.move_particles(dx, dy,  dtheta);
-
-  //Measaure, estimation, and resample
-  particle.measure();
-  //particle.print_particles();
-
-  // Convert physical coordinates to cell indices for the map
-  int cell_x = (int)(x / 20.0);
-  int cell_y = (int)(y / 20.0);
-
-  // Mark visit
-  myMap.visited(cell_x, cell_y);
-
-  // Decide on mode (special cell action or move forward)
-  Mode turn = myMap.cornerDetected(cell_x, cell_y);
-
-  // ===== GOAL LOGIC =====
-  if (myMap.atGoalLocation(cell_x, cell_y)) {
-    currentMode = AT_GOAL;
-
-        // If at the final goal coordinate of (2,1), trigger reversal
-    if (cell_x == 2 && cell_y == 1) {
-      Serial.println("Final goal reached. Reversing path now.");
-      reverseFullPath();  // Call your reversal function
-      currentMode = STOP; // stop after reversing
+void wallFollowRight(float targetDistance) {
+  Serial.print("Wall follow RIGHT for ");
+  Serial.print(targetDistance);
+  Serial. println("cm");
+  
+  encoders.getCountsAndResetLeft();
+  encoders. getCountsAndResetRight();
+  float distanceTraveled = 0;
+  int16_t leftTotal = 0;
+  int16_t rightTotal = 0;
+  
+  while(distanceTraveled < targetDistance) {
+    deltaL = encoders.getCountsAndResetLeft();
+    deltaR = encoders.getCountsAndResetRight();
+    leftTotal += deltaL;
+    rightTotal += deltaR;
+    
+    float countsPerRev = nL * gearRatio;
+    float distPerCount = (PI * diaL) / countsPerRev;
+    float avgCounts = (leftTotal + rightTotal) / 2.0;
+    distanceTraveled = avgCounts * distPerCount;
+    
+    wallDist = sonar.readDist();
+    Serial.println(wallDist);
+    int POut = (int)PDcontroller.update(wallDist, distFromWall);
+    motors.setSpeeds(int(BASE_SPEED - POut), int(BASE_SPEED + POut));
+    
+    // CHECK FOR BLACK SQUARE DURING TRAVERSAL - PICK BUT CONTINUE
+    if (pickCount < TARGET_PICKS && IR_sensor_detects_black_square()) {
+      Serial.println("BLACK SQUARE DETECTED!    Picking...");
+      motors.setSpeeds(0, 0);
+      delay(100);
+      
+      // 360° alignment spin
+      motors.setSpeeds(50, -50);
+      delay(3600);
+      motors. setSpeeds(0, 0);
+      delay(200);
+      
+      pickCount++;
+      display.clear();
+      display. print("Picks: ");
+      display.print(pickCount);
+      flash_led();
+      
+      delay(500);
+      
+      // RESET ENCODERS and CONTINUE until targetDistance is reached
+      encoders.getCountsAndResetLeft();
+      encoders.getCountsAndResetRight();
+      leftTotal = 0;
+      rightTotal = 0;
+      distanceTraveled = 0;
     }
   }
-    else {
-      //Mode turn = myMap.cornerDetected(cell_x, cell_y);
-      if (turn == TURN_LEFT)        currentMode = TURN_LEFT;
-      else if (turn == TURN_RIGHT)  currentMode = TURN_RIGHT;
-      else if (turn == REVERSE)     currentMode = REVERSE;
-      else                          currentMode = MOVE_FORWARD;
-  }
-
-  //save last odometer reading
-  x_last = x;
-  y_last = y;
-  theta_last = theta;
+  
+  motors. setSpeeds(0, 0);
 }
 
-// Odometry & distance calculation
-void CalculateDistance() {
-  deltaL = encoders.getCountsAndResetLeft();
-  deltaR = encoders.getCountsAndResetRight();
-  encCountsLeft += deltaL;
-  encCountsRight += deltaR;
-  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
+// ====================== TURN FUNCTIONS ======================
+void leftTurn() {
+  Serial.println("TURN_LEFT");
+  motors.setSpeeds(50, -50);
+  delay(1800);
+  motors.setSpeeds(0, 0);
+  delay(200);
 }
 
-// Movement Primitive
-void move_forward() {
-  Serial.println("MOVE_FORWARD");
-  motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-  delay(500);  // Move forward for 500ms
+void rightTurn() {
+  Serial.println("TURN_RIGHT");
+  motors.setSpeeds(-50, 50);
+  delay(1800);
+  motors. setSpeeds(0, 0);
+  delay(200);
+}
+
+void uTurn() {
+  Serial.println("Executing U-TURN.. .");
+  motors.setSpeeds(-50, 50);
+  delay(3600);
   motors.setSpeeds(0, 0);
   delay(100);
 }
 
-void turn_left() {
-  Serial.println("TURN_LEFT");
-  float target_theta = wrapPi(theta + (PI / 2.0));  // +90 degrees
-  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
-  
-  while (abs(wrapPi(theta - target_theta)) > 0.1) {
-    CalculateDistance();
-    delay(10);
-  }
-  motors.setSpeeds(0, 0);
+// ====================== HELPER FUNCTIONS ======================
+bool IR_sensor_detects_black_square() {
+  int ir_reading = analogRead(IR_SENSOR_PIN);
+  return ir_reading < BLACK_THRESHOLD;
+}
+
+void flash_led() {
+  digitalWrite(LED_PIN, HIGH);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
   delay(200);
+  digitalWrite(LED_PIN, HIGH);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
 }
 
-void turn_right() {
-  Serial.println("TURN_RIGHT");
-  float target_theta = wrapPi(theta - (PI / 2.0));  // -90 degrees
-  motors.setSpeeds(BASE_SPEED, -BASE_SPEED);
-  
-  while (abs(wrapPi(theta - target_theta)) > 0.1) {
-    CalculateDistance();
-    delay(10);
-  }
-  motors.setSpeeds(0, 0);
-  delay(200);
-}
-
-void reverse() {
-  Serial.println("REVERSE (180° turn)");
-  // Turn 180 degrees
-  float target_theta = wrapPi(theta + PI);
-  motors.setSpeeds(-BASE_SPEED, BASE_SPEED);
-  
-  while (abs(wrapPi(theta - target_theta)) > 0.2) {
-    CalculateDistance();
-    delay(10);
-  }
-  motors.setSpeeds(0, 0);
-  delay(200);
-}
-
-void at_goal() {
-  Serial.println("AT_GOAL - Goal location reached!");
-  motors.setSpeeds(0, 0);
-  delay(1000);
-  
-  // Continue traversing
-  currentMode = MOVE_FORWARD;
-}
-
-void stop() {
-  Serial.println("=== STOP - Traversal Complete ===");
-  motors.setSpeeds(0, 0);
-  
-  // Beep to signal completion
-  buzzer.playFrequency(880, 500, 15);
-  
-  // Stop forever
-  while(true) {
-    delay(1000);
-  }
-}
-
-
-// -------------------------------------Past Lab Functions just in case. -------------------------------------//
-/*void wallFollow() {
-  wallDist = sonar.readDist();
-
-  if (wallDist <= 0) {
-    // Sensor failed: slow forward
-    motors.setSpeeds(BASE_SPEED, BASE_SPEED);
-    return;
-  }
-
-  if (detectWhiteLine()) {
-    currentSpeed = FAST_SPEED;  // Speed up!
-  } else {
-    currentSpeed = BASE_SPEED;  // Normal speed
-  }
-
-  /*
-  // Check for black square (pick bin - Phase 3, B1/B2)
-  if (detectBlackSquare()) {
-    currentMode = AT_GOAL;  // Trigger pick sequence
-    return;
-  }  
-  
-
-  PDout = (int)pd_obs.update(wallDist, distFromWall); // PD controller for distance
-
-  int16_t left = constrain(BASE_SPEED - PDout, -400, 400);
-  int16_t right = constrain(BASE_SPEED + PDout, -400, 400);
-
-  motors.setSpeeds(left, right);
-
-  int current_x = (int)(x / 20.0);  // x in cm / 20cm per cell
-  int current_y = (int)(y / 20.0);  // y in cm / 20cm per cell
-  
-  if (myMap.cornerDetected(current_x, current_y)) {
-    currentMode = AT_CORNER;
-  }
-
-  // Check for goal arrival
-  if (myMap.atGoalLocation((int)x, (int)y)) {
-    currentMode = AT_GOAL;
-  }
-}*/
-
+// ====================== PAST LAB FUNCTIONS (FOR REFERENCE) ======================
 bool detectWhiteLine(){
   lineSensors.read(lineDetectionValues);
 
@@ -373,62 +369,10 @@ bool detectWhiteLine(){
   return (whiteCount >= 2);
 }
 
-/*B1 and B2 Code
-bool detectBlackSquare(){
-  lineSensors.read(lineDetectionValues);
-
-  const int blackThreshold = 1500;
-  int blackCount = 0;
-
-  for (int i = 0; i < 5; i++) {
-    if (lineDetectionValues[i] > blackThreshold) {
-      blackCount++;
-    }
-  }
-  return (blackCount >= 2);
+void CalculateDistance() {
+  deltaL = encoders.getCountsAndResetLeft();
+  deltaR = encoders.getCountsAndResetRight();
+  encCountsLeft += deltaL;
+  encCountsRight += deltaR;
+  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
 }
-
-void collectBin() {
-  Serial.println("BIN DETECTED!");
-  
-  // Stop
-  motors.setSpeeds(0, 0);
-  delay(500);
-  
-  // Spin 360
-  spin360();
-  
-  // Update counter
-  binCount++;
-  
-  // Flash LED
-  for (int i = 0; i < 3; i++) {
-    ledYellow(1);
-    delay(100);
-    ledYellow(0);
-    delay(100);
-  }
-  
-  // Beep
-  buzzer.playFrequency(880, 200, 15);
-  
-  Serial.print("Collected bin #");
-  Serial.println(binCount);
-  
-  delay(500);
-}
-
-// ===== 360 SPIN =====
-void spin360() {
-  display.clear();
-  display.print("Spin!");
-  
-  // Time for 360-degree rotation
-  // Wheelbase = 9.7cm, circumference = pi * 9.7 = 30.5cm
-  // At speed 120, roughly 3-4 seconds for 360
-  motors.setSpeeds(120, -120);
-  delay(3200);  // Adjust this based on testing
-  
-  motors.setSpeeds(0, 0);
-  delay(300);
-}*/
