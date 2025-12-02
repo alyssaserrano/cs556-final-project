@@ -1,33 +1,42 @@
 #include <Pololu3piPlus32U4.h>
 #include <Pololu3piPlus32U4Buttons.h>
 using namespace Pololu3piPlus32U4;
+#include "particle_filter.h"
 #include "odometry.h"
+#include "Map.h"
 #include "sonar.h"
 #include "PIDcontroller.h"
+#include <Gaussian.h>
+#include <ArduinoJson.h>
 #include <Servo.h>
 
 // ====================== CONSTANTS AND PARAMETERS ======================
-#define WALL_DIST 20     // Desired distance from wall in cm
+#define WALL_DIST 10
 #define BASE_SPEED 120
-#define FAST_SPEED 250  // Speed on white line
+#define FAST_SPEED 250
 
-#define diaL 3.2 //define physical robot parameters
-#define diaR  3.2
+#define diaL 3.2
+#define diaR 3.2
 #define nL 12
 #define nR 12
 #define w 9.6
 #define gearRatio 75
 
-// Phase 3: Pick Detection
-#define BLACK_THRESHOLD 500  // Adjust based on your IR sensor readings
+// Phase 3/4: IR Sensor Detection
+#define IR_SENSOR_PIN A0
+#define LED_PIN 13
+#define BLACK_THRESHOLD 900
+#define BLUE_MIN_CAL 200
+#define BLUE_MAX_CAL 500
 #define TARGET_PICKS 3
 
 // ====================== HARDWARE OBJECTS ======================
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
-PIDcontroller PDcontroller(0.6, 0.03, 0.25, -100.0, 100. 0, 1.0);  // For wall following
+PIDcontroller PDcontroller(0.6, 0.03, 0.25, -100.0, 100.0, 1.0);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
+LineSensors lineSensors;
 OLED display;
 
 // Servo
@@ -36,19 +45,22 @@ Servo servo;
 // ====================== STATE VARIABLES ======================
 float wallDist;
 float distFromWall = WALL_DIST;
-
+int PDout = 0;
 int currentSpeed = BASE_SPEED;
 
-/* Odometry tracking
+// Odometry tracking
 float x = 0, y = 0, theta = 0;
 float x_last = 0, y_last = 0, theta_last = 0;
 long encCountsLeft = 0, encCountsRight = 0;
-long deltaL = 0, deltaR = 0;*/
+long deltaL = 0, deltaR = 0;
+
+// Sensor readings
+unsigned int lineDetectionValues[5];
 
 // ====================== SEGMENT TRACKING ======================
 int pickCount = 0;
-int executedSegments[50];  
-int segmentCount = 0;      
+int executedSegments[50];
+int segmentCount = 0;
 
 enum SegmentType {
   WALL_FOLLOW_LEFT,
@@ -105,6 +117,19 @@ const int NUM_SEGMENTS = 33;
 // ====================== SETUP ======================
 void setup() {
   Serial.begin(9600);
+  while (!Serial) continue;
+  delay(1000);
+
+  // Phase 3: IR sensor
+  pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  // Phase 4: Calibrate line sensors
+  Serial.println("Calibrating sensors...");
+  calibrateSensors();
+  
+  Serial.println("Ready to start!");
   delay(2000);
 }
 
@@ -126,7 +151,7 @@ void loop() {
   
   // ===== ONCE 3 PICKS FOUND, REVERSE =====
   if (pickCount == TARGET_PICKS) {
-    Serial.println("All 3 picks found!     Turning 180.. .");
+    Serial.println("All 3 picks found!      Turning 180...");
     delay(1000);
     uTurn();
     delay(1000);
@@ -170,7 +195,6 @@ void execute_segment(Segment seg) {
 }
 
 void execute_segment_reversed(Segment seg) {
-  // Swap left/right walls AND left/right turns! 
   switch (seg.type) {
     case WALL_FOLLOW_LEFT:
       wallFollowRight(seg.distance);
@@ -194,73 +218,16 @@ void execute_segment_reversed(Segment seg) {
   }
 }
 
-// ====================== WALL FOLLOWING WITH INTEGRATED PICK DETECTION ======================
+// ====================== WALL FOLLOWING WITH INTEGRATED DETECTION ======================
 void wallFollowLeft(float targetDistance) {
   Serial.print("Wall follow LEFT for ");
   Serial.print(targetDistance);
-  Serial. println("cm");
+  Serial.println("cm");
+  
+  servo.write(180);
   
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
-  float distanceTraveled = 0;
-  int16_t leftTotal = 0;
-  int16_t rightTotal = 0;
-  
-  while(distanceTraveled < targetDistance) {
-    deltaL = encoders.getCountsAndResetLeft();
-    deltaR = encoders. getCountsAndResetRight();
-    leftTotal += deltaL;
-    rightTotal += deltaR;
-    
-    float countsPerRev = nL * gearRatio;
-    float distPerCount = (PI * diaL) / countsPerRev;
-    float avgCounts = (leftTotal + rightTotal) / 2.0;
-    distanceTraveled = avgCounts * distPerCount;
-    
-    wallDist = sonar.readDist();
-    Serial.println(wallDist);
-    int POut = (int)PDcontroller.update(wallDist, distFromWall);
-    motors.setSpeeds(int(BASE_SPEED + POut), int(BASE_SPEED - POut));
-    
-    // CHECK FOR BLACK SQUARE DURING TRAVERSAL - PICK BUT CONTINUE
-    if (pickCount < TARGET_PICKS && IR_sensor_detects_black_square()) {
-      Serial.println("BLACK SQUARE DETECTED!     Picking.. .");
-      motors.setSpeeds(0, 0);
-      delay(100);
-      
-      // 360° alignment spin
-      motors.setSpeeds(50, -50);
-      delay(3600);
-      motors.setSpeeds(0, 0);
-      delay(200);
-      
-      pickCount++;
-      display. clear();
-      display.print("Picks: ");
-      display.print(pickCount);
-      flash_led();
-      
-      delay(500);
-      
-      // RESET ENCODERS and CONTINUE until targetDistance is reached
-      encoders.getCountsAndResetLeft();
-      encoders.getCountsAndResetRight();
-      leftTotal = 0;
-      rightTotal = 0;
-      distanceTraveled = 0;
-    }
-  }
-  
-  motors.setSpeeds(0, 0);
-}
-
-void wallFollowRight(float targetDistance) {
-  Serial.print("Wall follow RIGHT for ");
-  Serial.print(targetDistance);
-  Serial. println("cm");
-  
-  encoders.getCountsAndResetLeft();
-  encoders. getCountsAndResetRight();
   float distanceTraveled = 0;
   int16_t leftTotal = 0;
   int16_t rightTotal = 0;
@@ -277,40 +244,125 @@ void wallFollowRight(float targetDistance) {
     distanceTraveled = avgCounts * distPerCount;
     
     wallDist = sonar.readDist();
-    Serial.println(wallDist);
-    int POut = (int)PDcontroller.update(wallDist, distFromWall);
-    motors.setSpeeds(int(BASE_SPEED - POut), int(BASE_SPEED + POut));
     
-    // CHECK FOR BLACK SQUARE DURING TRAVERSAL - PICK BUT CONTINUE
-    if (pickCount < TARGET_PICKS && IR_sensor_detects_black_square()) {
-      Serial.println("BLACK SQUARE DETECTED!    Picking...");
+    // ===== CHECK SURFACE TYPE =====
+    lineSensors.readCalibrated(lineDetectionValues);
+    uint16_t centerSensor = lineDetectionValues[2];
+    
+    // PHASE 3: Black square detection
+    if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
+      Serial.println("BLACK SQUARE DETECTED!  Picking...");
       motors.setSpeeds(0, 0);
       delay(100);
       
-      // 360° alignment spin
       motors.setSpeeds(50, -50);
       delay(3600);
-      motors. setSpeeds(0, 0);
+      motors.setSpeeds(0, 0);
       delay(200);
       
       pickCount++;
       display.clear();
-      display. print("Picks: ");
+      display.print("Picks: ");
       display.print(pickCount);
       flash_led();
       
       delay(500);
       
-      // RESET ENCODERS and CONTINUE until targetDistance is reached
       encoders.getCountsAndResetLeft();
       encoders.getCountsAndResetRight();
       leftTotal = 0;
       rightTotal = 0;
       distanceTraveled = 0;
+      continue;
     }
+    
+    // PHASE 4: Blue line detection (speed up on fast track)
+    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
+      currentSpeed = FAST_SPEED;
+    } else {
+      currentSpeed = BASE_SPEED;
+    }
+    
+    // Wall follow with current speed
+    int POut = (int)PDcontroller.update(wallDist, distFromWall);
+    motors.setSpeeds(int(currentSpeed + POut), int(currentSpeed - POut));
   }
   
-  motors. setSpeeds(0, 0);
+  motors.setSpeeds(0, 0);
+  currentSpeed = BASE_SPEED;  // Reset to normal speed
+}
+
+void wallFollowRight(float targetDistance) {
+  Serial.print("Wall follow RIGHT for ");
+  Serial.print(targetDistance);
+  Serial.println("cm");
+  
+  servo.write(0);
+  
+  encoders.getCountsAndResetLeft();
+  encoders.getCountsAndResetRight();
+  float distanceTraveled = 0;
+  int16_t leftTotal = 0;
+  int16_t rightTotal = 0;
+  
+  while(distanceTraveled < targetDistance) {
+    deltaL = encoders.getCountsAndResetLeft();
+    deltaR = encoders.getCountsAndResetRight();
+    leftTotal += deltaL;
+    rightTotal += deltaR;
+    
+    float countsPerRev = nL * gearRatio;
+    float distPerCount = (PI * diaL) / countsPerRev;
+    float avgCounts = (leftTotal + rightTotal) / 2.0;
+    distanceTraveled = avgCounts * distPerCount;
+    
+    wallDist = sonar.readDist();
+    
+    // ===== CHECK SURFACE TYPE =====
+    lineSensors.readCalibrated(lineDetectionValues);
+    uint16_t centerSensor = lineDetectionValues[2];
+    
+    // PHASE 3: Black square detection
+    if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
+      Serial.println("BLACK SQUARE DETECTED! Picking...");
+      motors.setSpeeds(0, 0);
+      delay(100);
+      
+      motors.setSpeeds(50, -50);
+      delay(3600);
+      motors.setSpeeds(0, 0);
+      delay(200);
+      
+      pickCount++;
+      display.clear();
+      display.print("Picks: ");
+      display.print(pickCount);
+      flash_led();
+      
+      delay(500);
+      
+      encoders.getCountsAndResetLeft();
+      encoders.getCountsAndResetRight();
+      leftTotal = 0;
+      rightTotal = 0;
+      distanceTraveled = 0;
+      continue;
+    }
+    
+    // PHASE 4: Blue line detection (speed up on fast track)
+    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
+      currentSpeed = FAST_SPEED;
+    } else {
+      currentSpeed = BASE_SPEED;
+    }
+    
+    // Wall follow with current speed
+    int POut = (int)PDcontroller.update(wallDist, distFromWall);
+    motors.setSpeeds(int(currentSpeed - POut), int(currentSpeed + POut));
+  }
+  
+  motors.setSpeeds(0, 0);
+  currentSpeed = BASE_SPEED;  // Reset to normal speed
 }
 
 // ====================== TURN FUNCTIONS ======================
@@ -326,24 +378,37 @@ void rightTurn() {
   Serial.println("TURN_RIGHT");
   motors.setSpeeds(-50, 50);
   delay(1800);
-  motors. setSpeeds(0, 0);
+  motors.setSpeeds(0, 0);
   delay(200);
 }
 
 void uTurn() {
-  Serial.println("Executing U-TURN.. .");
+  Serial.println("Executing U-TURN...");
   motors.setSpeeds(-50, 50);
   delay(3600);
   motors.setSpeeds(0, 0);
   delay(100);
 }
 
-// ====================== HELPER FUNCTIONS ======================
-bool IR_sensor_detects_black_square() {
-  int ir_reading = analogRead(IR_SENSOR_PIN);
-  return ir_reading < BLACK_THRESHOLD;
+// ====================== SENSOR CALIBRATION ======================
+void calibrateSensors() {
+  delay(1000);
+  Serial.println("Calibrating sensors...");
+  
+  for(int i = 0; i < 120; i++) {
+    if (i > 30 && i <= 90) {
+      motors.setSpeeds(-60, 60);  // Rotate left
+    } else {
+      motors.setSpeeds(60, -60);  // Rotate right
+    }
+    lineSensors.calibrate();
+  }
+  
+  motors.setSpeeds(0, 0);
+  Serial.println("Calibration complete!");
 }
 
+// ====================== HELPER FUNCTIONS ======================
 void flash_led() {
   digitalWrite(LED_PIN, HIGH);
   delay(500);
@@ -352,27 +417,4 @@ void flash_led() {
   digitalWrite(LED_PIN, HIGH);
   delay(500);
   digitalWrite(LED_PIN, LOW);
-}
-
-// ====================== PAST LAB FUNCTIONS (FOR REFERENCE) ======================
-bool detectWhiteLine(){
-  lineSensors.read(lineDetectionValues);
-
-  const int whiteThreshold = 1500;
-  int whiteCount = 0;
-
-  for (int i = 0; i < 5; i++) {
-    if (lineDetectionValues[i] < whiteThreshold) {
-      whiteCount++;
-    }
-  }
-  return (whiteCount >= 2);
-}
-
-void CalculateDistance() {
-  deltaL = encoders.getCountsAndResetLeft();
-  deltaR = encoders.getCountsAndResetRight();
-  encCountsLeft += deltaL;
-  encCountsRight += deltaR;
-  odometry.update_odom(encCountsLeft, encCountsRight, x, y, theta);
 }
