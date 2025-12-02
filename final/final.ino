@@ -1,28 +1,41 @@
 #include <Pololu3piPlus32U4.h>
-#include "odometry.h"
+#include "odometry. h"
 #include "sonar.h"
 #include <Servo.h>
 #include "PDcontroller.h"
 using namespace Pololu3piPlus32U4;
 
-// ----------------- Set up ----------------------------------------//
+// ====================== CONSTANTS ======================
 #define PI 3.14159
-
 #define diaL 3.2
-#define diaR  3.2
+#define diaR 3.2
 #define nL 12
 #define nR 12
 #define w 9.6
 #define gearRatio 75
 
-// kp and kd
 #define minOutput -100
 #define maxOutput 100
 #define kp 1
 #define kd 1
-#define base_speed 100
+#define BASE_SPEED 100
+#define FAST_SPEED 250
+#define WALL_DIST 20
 
-// Hardware objects
+// Phase 3/4: IR Sensor Detection
+#define BLUE_MIN_CAL 200
+#define BLUE_MAX_CAL 500
+#define BLACK_THRESHOLD 900
+#define TARGET_PICKS 3
+
+// Segment types
+#define WALL_FOLLOW_LEFT 0
+#define WALL_FOLLOW_RIGHT 1
+#define LEFT_TURN 2
+#define RIGHT_TURN 3
+#define U_TURN 4
+
+// ====================== HARDWARE OBJECTS ======================
 Motors motors;
 Encoders encoders;
 Sonar sonar(4);
@@ -30,134 +43,345 @@ PDcontroller PDcontroller(kp, kd, minOutput, maxOutput);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
-
-// Servo
 Servo servo;
 
-// State variables
+// ====================== STATE VARIABLES ======================
 float wallDist;
 float distFromWall = WALL_DIST;
 int PDout = 0;
-bool is_localized = false;
-int movement_cycles = 0;
 int currentSpeed = BASE_SPEED;
+int pickCount = 0;
+long deltaL = 0;
+long deltaR = 0;
 
-// Odometry tracking
-float x = 0, y = 0, theta = 0;
-float x_last = 0, y_last = 0, theta_last = 0;
-long encCountsLeft = 0, encCountsRight = 0;
-long deltaL = 0, deltaR = 0;
+// Sensor readings
+unsigned int lineDetectionValues[5];
 
-// wrapPi function
-static inline float wrapPi(float a){ while(a <= -PI) a += 2*PI; while(a > PI) a -= 2*PI; return a; }
+// ====================== SEGMENT STRUCT ======================
+struct Segment {
+  int type;      // WALL_FOLLOW_LEFT, WALL_FOLLOW_RIGHT, LEFT_TURN, RIGHT_TURN, U_TURN
+  float distance; // distance in cm (0 for turns)
+};
 
-// Setup all hardware and subsystems
+// ====================== FORWARD PATH ======================
+Segment forwardPath[] = {
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 100},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {U_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 60},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {U_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20}
+};
+
+const int NUM_FORWARD_SEGMENTS = 33;
+
+// ====================== REVERSE PATH (REVERSED & SWAPPED) ======================
+Segment reversePath[] = {
+  {WALL_FOLLOW_RIGHT, 20},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {U_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 60},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {U_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 40},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 20},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 40},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_RIGHT, 20},
+  {RIGHT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 100},
+  {LEFT_TURN, 0},
+  {WALL_FOLLOW_LEFT, 60}
+};
+
+const int NUM_REVERSE_SEGMENTS = 33;
+
+// ====================== SETUP ======================
 void setup() {
   Serial.begin(9600);
+  delay(2000);
   servo.attach(5);
   servo.write(180);
   delay(40);
+
+  // Calibrate line sensors for Phase 3/4
+  Serial.println("Calibrating sensors...");
+  calibrateSensors();
+  delay(1000);
 }
 
-//-------------------------- Main control loop --------------------------//
+// ====================== MAIN CONTROL LOOP ======================
 void loop() {
-  // Go forward 60 cm.
-  wallRight(60.0);
-  delay(500);
+  Serial.println("=== STARTING FORWARD PATH ===");
+  
+  // Execute forward path with Phase 3/4 detection
+  for (int i = 0; i < NUM_FORWARD_SEGMENTS && pickCount < TARGET_PICKS; i++) {
+    execute_segment(forwardPath[i]);
+    delay(500);
+  }
 
-  // Then turn left
-  leftTurn();
-  delay(500);
+  // Once 3 picks found, reverse
+  if (pickCount == TARGET_PICKS) {
+    Serial.println("=== 3 PICKS FOUND!  RETURNING HOME ===");
+    delay(2000);
 
-  // Go forward another 80 to first goal pos
-  // 160 cm - 20 cm = 80 cm
-  wallRight(80.0);
-  delay(500);
+    // Execute reverse path
+    for (int i = 0; i < NUM_REVERSE_SEGMENTS; i++) {
+      execute_segment(reversePath[i]);
+      delay(500);
+    }
 
-  // Turn left at (100, 80)
-  leftTurn();
-  delay(500);
-
-  // go forward 40
-  wallRight(40.0);
-  delay(500);
-
-  // turn right at (100, 20)
-  rightTurn();
-  delay(500);
-
-  // go forward 40 cm
-  wallRight(40.0);
-  delay(500);
-
-  // turn right at (120, 20)
-  rightTurn();
-  delay(500);
-
-  // go forward 40 cm
-  wallRight(40.0);
-  delay(500);
-
-  // Turn left at (120, 60)
-  leftTurn();
-  delay(500);
-
-  // go forward 20 cm
-  wallRight(20.0);
-  delay(500);
-
-  // turn left
-  leftTurn();
-  delay(500);
-
-  // go forward 60 cm
-  wallRight(60.0);
-  delay(500);
-
-  // turn left at (180, 0)
-  leftTurn();
-  delay(500);
-
-  // go forward 10 cm (toward alley way)
-  wallRight(10.0);
-  delay(500);
-
-  // turn left
+    Serial.println("=== MISSION COMPLETE!  ===");
+    while(1);  // Stop
+  }
 }
 
-// -------------------------------------------- Core Behaviors --------------------------------------//
-void wallLeft(float targetDist){
-  // face head to left
+// ====================== EXECUTE SEGMENT ======================
+void execute_segment(Segment seg) {
+  if (seg.type == WALL_FOLLOW_LEFT) {
+    wallFollowLeft(seg.distance);
+  } 
+  else if (seg.type == WALL_FOLLOW_RIGHT) {
+    wallFollowRight(seg.distance);
+  } 
+  else if (seg. type == LEFT_TURN) {
+    leftTurn();
+  } 
+  else if (seg.type == RIGHT_TURN) {
+    rightTurn();
+  } 
+  else if (seg.type == U_TURN) {
+    uTurn();
+  }
+}
+
+// ====================== WALL FOLLOWING WITH PHASE 3/4 ======================
+void wallFollowLeft(float targetDistance) {
+  Serial.print("Wall LEFT for ");
+  Serial.print(targetDistance);
+  Serial.println("cm");
+  
   servo.write(180);
 
-  // make sure to reset encoders count and other variables for accurate measurement
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
   float distanceTraveled = 0;
   int16_t leftTotal = 0;
   int16_t rightTotal = 0;
 
-  // Loop to get calculate the distance traveled till we reach out desired distance
-  while(distanceTraveled < targetDistance){
+  while(distanceTraveled < targetDistance) {
     deltaL = encoders.getCountsAndResetLeft();
-    deltaR = encoders.getCountsAndResetRight();
+    deltaR = encoders. getCountsAndResetRight();
     leftTotal += deltaL;
     rightTotal += deltaR;
 
-    float countsPerRev = nL + gearRatio;
+    float countsPerRev = nL * gearRatio;
     float distPerCount = (PI * diaL) / countsPerRev;
     float avgCounts = (leftTotal + rightTotal) / 2.0;
     distanceTraveled = avgCounts * distPerCount;
 
     wallDist = sonar.readDist();
-    Serialprintln(wallDist);
 
-    // Get PD output to set the speed of the motors
+    // ===== PHASE 3/4: CHECK SURFACE TYPE =====
+    lineSensors.readCalibrated(lineDetectionValues);
+    uint16_t centerSensor = lineDetectionValues[2];
+
+    // PHASE 3: Black square detection
+    if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
+      Serial.println("BLACK SQUARE DETECTED! Picking.. .");
+      motors.setSpeeds(0, 0);
+      delay(200);
+
+      // 360° spin
+      motors.setSpeeds(50, -50);
+      delay(3600);
+      motors.setSpeeds(0, 0);
+      delay(200);
+
+      pickCount++;
+      Serial.print("Picks: ");
+      Serial.println(pickCount);
+
+      // Reset distance tracking
+      encoders.getCountsAndResetLeft();
+      encoders.getCountsAndResetRight();
+      leftTotal = 0;
+      rightTotal = 0;
+      distanceTraveled = 0;
+      continue;
+    }
+
+    // PHASE 4: Blue line detection (speed up)
+    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
+      currentSpeed = FAST_SPEED;
+    } else {
+      currentSpeed = BASE_SPEED;
+    }
+
+    // Wall follow with current speed
     PDout = PDcontroller.update(wallDist, distFromWall);
-    // Made for left wall following
-    motors.setSpeeds(int (baseSpeed - PDout), int(baseSpeed + PDout));
-
+    motors.setSpeeds(int(currentSpeed - PDout), int(currentSpeed + PDout));
   }
 
+  motors.setSpeeds(0, 0);
+  currentSpeed = BASE_SPEED;
 }
 
+void wallFollowRight(float targetDistance) {
+  Serial.print("Wall RIGHT for ");
+  Serial. print(targetDistance);
+  Serial.println("cm");
+  
+  servo.write(0);
+
+  encoders.getCountsAndResetLeft();
+  encoders.getCountsAndResetRight();
+  float distanceTraveled = 0;
+  int16_t leftTotal = 0;
+  int16_t rightTotal = 0;
+
+  while(distanceTraveled < targetDistance) {
+    deltaL = encoders.getCountsAndResetLeft();
+    deltaR = encoders.getCountsAndResetRight();
+    leftTotal += deltaL;
+    rightTotal += deltaR;
+
+    float countsPerRev = nL * gearRatio;
+    float distPerCount = (PI * diaL) / countsPerRev;
+    float avgCounts = (leftTotal + rightTotal) / 2.0;
+    distanceTraveled = avgCounts * distPerCount;
+
+    wallDist = sonar.readDist();
+
+    // ===== PHASE 3/4: CHECK SURFACE TYPE =====
+    lineSensors.readCalibrated(lineDetectionValues);
+    uint16_t centerSensor = lineDetectionValues[2];
+
+    // PHASE 3: Black square detection
+    if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
+      Serial.println("BLACK SQUARE DETECTED! Picking...");
+      motors.setSpeeds(0, 0);
+      delay(200);
+
+      // 360° spin
+      motors.setSpeeds(50, -50);
+      delay(3600);
+      motors.setSpeeds(0, 0);
+      delay(200);
+
+      pickCount++;
+      Serial.print("Picks: ");
+      Serial.println(pickCount);
+
+      // Reset distance tracking
+      encoders.getCountsAndResetLeft();
+      encoders. getCountsAndResetRight();
+      leftTotal = 0;
+      rightTotal = 0;
+      distanceTraveled = 0;
+      continue;
+    }
+
+    // PHASE 4: Blue line detection (speed up)
+    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
+      currentSpeed = FAST_SPEED;
+    } else {
+      currentSpeed = BASE_SPEED;
+    }
+
+    // Wall follow with current speed
+    PDout = PDcontroller.update(wallDist, distFromWall);
+    motors.setSpeeds(int(currentSpeed + PDout), int(currentSpeed - PDout));
+  }
+
+  motors.setSpeeds(0, 0);
+  currentSpeed = BASE_SPEED;
+}
+
+// ====================== TURN FUNCTIONS ======================
+void leftTurn() {
+  Serial.println("LEFT TURN");
+  motors.setSpeeds(50, -50);
+  delay(1800);
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+void rightTurn() {
+  Serial.println("RIGHT TURN");
+  motors.setSpeeds(-50, 50);
+  delay(1800);
+  motors. setSpeeds(0, 0);
+  delay(200);
+}
+
+void uTurn() {
+  Serial.println("U-TURN");
+  motors.setSpeeds(-50, 50);
+  delay(3600);
+  motors.setSpeeds(0, 0);
+  delay(200);
+}
+
+// ====================== CALIBRATION ======================
+void calibrateSensors() {
+  delay(1000);
+  Serial.println("Calibrating sensors.. .");
+  
+  for(int i = 0; i < 120; i++) {
+    if (i > 30 && i <= 90) {
+      motors.setSpeeds(-60, 60);
+    } else {
+      motors.setSpeeds(60, -60);
+    }
+    lineSensors.calibrate();
+  }
+  
+  motors.setSpeeds(0, 0);
+  Serial.println("Calibration complete!");
+}
