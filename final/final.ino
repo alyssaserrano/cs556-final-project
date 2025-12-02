@@ -1,5 +1,5 @@
 #include <Pololu3piPlus32U4.h>
-#include "odometry. h"
+#include "odometry.h"
 #include "sonar.h"
 #include <Servo.h>
 #include "PDcontroller.h"
@@ -59,8 +59,8 @@ unsigned int lineDetectionValues[5];
 
 // ====================== SEGMENT STRUCT ======================
 struct Segment {
-  int type;      // WALL_FOLLOW_LEFT, WALL_FOLLOW_RIGHT, LEFT_TURN, RIGHT_TURN, U_TURN
-  float distance; // distance in cm (0 for turns)
+  int type;
+  float distance;
 };
 
 // ====================== FORWARD PATH ======================
@@ -102,7 +102,7 @@ Segment forwardPath[] = {
 
 const int NUM_FORWARD_SEGMENTS = 33;
 
-// ====================== REVERSE PATH (REVERSED & SWAPPED) ======================
+// ====================== REVERSE PATH ======================
 Segment reversePath[] = {
   {WALL_FOLLOW_RIGHT, 20},
   {RIGHT_TURN, 0},
@@ -167,7 +167,7 @@ void loop() {
 
   // Once 3 picks found, reverse
   if (pickCount == TARGET_PICKS) {
-    Serial.println("=== 3 PICKS FOUND!  RETURNING HOME ===");
+    Serial. println("=== 3 PICKS FOUND!   RETURNING HOME ===");
     delay(2000);
 
     // Execute reverse path
@@ -176,7 +176,7 @@ void loop() {
       delay(500);
     }
 
-    Serial.println("=== MISSION COMPLETE!  ===");
+    Serial.println("=== MISSION COMPLETE!   ===");
     while(1);  // Stop
   }
 }
@@ -184,10 +184,10 @@ void loop() {
 // ====================== EXECUTE SEGMENT ======================
 void execute_segment(Segment seg) {
   if (seg.type == WALL_FOLLOW_LEFT) {
-    wallFollowLeft(seg.distance);
+    wallLeft(seg.distance);
   } 
   else if (seg.type == WALL_FOLLOW_RIGHT) {
-    wallFollowRight(seg.distance);
+    wallRight(seg.distance);
   } 
   else if (seg. type == LEFT_TURN) {
     leftTurn();
@@ -200,21 +200,20 @@ void execute_segment(Segment seg) {
   }
 }
 
-// ====================== WALL FOLLOWING WITH PHASE 3/4 ======================
-void wallFollowLeft(float targetDistance) {
-  Serial.print("Wall LEFT for ");
-  Serial.print(targetDistance);
-  Serial.println("cm");
-  
+// ====================== WALL FOLLOW LEFT (FIXED) ======================
+void wallLeft(float targetDist) {
+  // face head to left
   servo.write(180);
 
+  // make sure to reset encoders count and other variables for accurate measurement
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
   float distanceTraveled = 0;
   int16_t leftTotal = 0;
   int16_t rightTotal = 0;
 
-  while(distanceTraveled < targetDistance) {
+  // Loop to get calculate the distance traveled till we reach out desired distance
+  while(distanceTraveled < targetDist) {
     deltaL = encoders.getCountsAndResetLeft();
     deltaR = encoders. getCountsAndResetRight();
     leftTotal += deltaL;
@@ -226,6 +225,7 @@ void wallFollowLeft(float targetDistance) {
     distanceTraveled = avgCounts * distPerCount;
 
     wallDist = sonar.readDist();
+    Serial.println(wallDist);
 
     // ===== PHASE 3/4: CHECK SURFACE TYPE =====
     lineSensors.readCalibrated(lineDetectionValues);
@@ -233,7 +233,7 @@ void wallFollowLeft(float targetDistance) {
 
     // PHASE 3: Black square detection
     if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
-      Serial.println("BLACK SQUARE DETECTED! Picking.. .");
+      Serial.println("BLACK SQUARE DETECTED!   Picking.. .");
       motors.setSpeeds(0, 0);
       delay(200);
 
@@ -263,8 +263,9 @@ void wallFollowLeft(float targetDistance) {
       currentSpeed = BASE_SPEED;
     }
 
-    // Wall follow with current speed
+    // Get PD output to set the speed of the motors
     PDout = PDcontroller.update(wallDist, distFromWall);
+    // Made for left wall following
     motors.setSpeeds(int(currentSpeed - PDout), int(currentSpeed + PDout));
   }
 
@@ -272,20 +273,20 @@ void wallFollowLeft(float targetDistance) {
   currentSpeed = BASE_SPEED;
 }
 
-void wallFollowRight(float targetDistance) {
-  Serial.print("Wall RIGHT for ");
-  Serial. print(targetDistance);
-  Serial.println("cm");
-  
+// ====================== WALL FOLLOW RIGHT (NEW - MIRROR OF LEFT) ======================
+void wallRight(float targetDist) {
+  // face head to right
   servo.write(0);
 
+  // make sure to reset encoders count and other variables for accurate measurement
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
   float distanceTraveled = 0;
   int16_t leftTotal = 0;
   int16_t rightTotal = 0;
 
-  while(distanceTraveled < targetDistance) {
+  // Loop to get calculate the distance traveled till we reach out desired distance
+  while(distanceTraveled < targetDist) {
     deltaL = encoders.getCountsAndResetLeft();
     deltaR = encoders.getCountsAndResetRight();
     leftTotal += deltaL;
@@ -297,6 +298,7 @@ void wallFollowRight(float targetDistance) {
     distanceTraveled = avgCounts * distPerCount;
 
     wallDist = sonar.readDist();
+    Serial.println(wallDist);
 
     // ===== PHASE 3/4: CHECK SURFACE TYPE =====
     lineSensors.readCalibrated(lineDetectionValues);
@@ -304,23 +306,23 @@ void wallFollowRight(float targetDistance) {
 
     // PHASE 3: Black square detection
     if (centerSensor >= BLACK_THRESHOLD && pickCount < TARGET_PICKS) {
-      Serial.println("BLACK SQUARE DETECTED! Picking...");
+      Serial.println("BLACK SQUARE DETECTED!  Picking...");
       motors.setSpeeds(0, 0);
       delay(200);
 
       // 360° spin
       motors.setSpeeds(50, -50);
       delay(3600);
-      motors.setSpeeds(0, 0);
+      motors. setSpeeds(0, 0);
       delay(200);
 
       pickCount++;
-      Serial.print("Picks: ");
+      Serial. print("Picks: ");
       Serial.println(pickCount);
 
       // Reset distance tracking
       encoders.getCountsAndResetLeft();
-      encoders. getCountsAndResetRight();
+      encoders.getCountsAndResetRight();
       leftTotal = 0;
       rightTotal = 0;
       distanceTraveled = 0;
@@ -334,8 +336,9 @@ void wallFollowRight(float targetDistance) {
       currentSpeed = BASE_SPEED;
     }
 
-    // Wall follow with current speed
+    // Get PD output to set the speed of the motors
     PDout = PDcontroller.update(wallDist, distFromWall);
+    // Made for right wall following (opposite motor mapping)
     motors.setSpeeds(int(currentSpeed + PDout), int(currentSpeed - PDout));
   }
 
@@ -354,7 +357,7 @@ void leftTurn() {
 
 void rightTurn() {
   Serial.println("RIGHT TURN");
-  motors.setSpeeds(-50, 50);
+  motors. setSpeeds(-50, 50);
   delay(1800);
   motors. setSpeeds(0, 0);
   delay(200);
@@ -371,7 +374,7 @@ void uTurn() {
 // ====================== CALIBRATION ======================
 void calibrateSensors() {
   delay(1000);
-  Serial.println("Calibrating sensors.. .");
+  Serial.println("Calibrating sensors...");
   
   for(int i = 0; i < 120; i++) {
     if (i > 30 && i <= 90) {
