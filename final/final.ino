@@ -16,11 +16,12 @@ using namespace Pololu3piPlus32U4;
 
 #define minOutput -100
 #define maxOutput 100
-#define kp 1
-#define kd 1
+#define kp 2.0
+#define kd 0.4
 #define BASE_SPEED 100
-#define FAST_SPEED 100
+#define FAST_SPEED 200
 #define WALL_DIST 20
+#define FRONT_OBSTACLE_DIST 15
 
 // Phase 3/4: IR Sensor Detection
 #define BLUE_MIN_CAL 200
@@ -38,22 +39,24 @@ OLED display;
 Servo servo;
 
 // ====================== STATE VARIABLES ======================
-float wallDist;
-float distFromWall = WALL_DIST;
+float currentDistFromWall;
+float desiredDistFromWall = WALL_DIST;
 int PDout = 0;
 int currentSpeed = BASE_SPEED;
 long deltaL = 0;
 long deltaR = 0;
 const float goal_theta;
 float theta;
+int pickCount = 0;
 
-enum Mode { MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, AT_GOAL, REVERSE, STOP, WALL_FOLLOW_LEFT, NONE };
-Mode currentMode;
+// FSA (Finite States)
+enum State { EXIT_DOCK, EXPLORE, PICK_SERVICE, CHECK_GOALS, RETURN_HOME, DOCK_ALIGN, COMPLETE, LINE_FOLLOWING };
+State currentMode;
 
 // Sensor readings
 unsigned int lineDetectionValues[5];
 
-// ====================== SETUP ======================
+// ====================== SETUP (INIT) ======================
 void setup() {
   Serial.begin(9600);
   delay(2000);
@@ -65,6 +68,8 @@ void setup() {
   Serial.println("Calibrating sensors...");
   calibrateSensors();
   delay(1000);
+
+  currentMode = EXIT_DOCK;
 }
 
 // ====================== MAIN CONTROL LOOP ======================
@@ -72,263 +77,74 @@ void loop() {
   Serial.println("=== FORWARD PATH ===");
   
     switch(currentMode){
-    case MOVE_FORWARD:
-      moveForward(20.0);
-      currentMode = WALL_FOLLOW_LEFT;
-      break;
-    case WALL_FOLLOW_LEFT:
-      leftTurn();
-      break;
+      case EXIT_DOCK:
+        moveForward(20.0);
+        currentMode = EXPLORE;
+        break;
+      case EXPLORE:
+        // Mark down visited cell
+        explore();
+
+        // Check center of square for black.
+        if(blackSquareDetected()){
+          currentMode = PICK_SERVICE;
+        }
+
+        // Check if there is a blue line.
+        if(computeBlueLinePosition()){
+          currentMode = LINE_FOLLOWING;
+        }
+        break;
+      case LINE_FOLLOWING:
+        linefollowing();
+        leftTurn();
+        currentMode = EXPLORE;
+
+        break;
+      case PICK_SERVICE:
+        Serial.println("State: Pick_service!");
+        pick_service();
+        pickCount++;
+      
+        currentMode = CHECK_GOALS;
+        break;
+
+      case CHECK_GOALS:
+        // Check for all goals
+        if(pickCount < 3){
+          currentMode = EXPLORE;
+        }
+        else{
+          currentMode = RETURN_HOME;
+        }
+        break;
+
+      case RETURN_HOME:
+        returnHome();
+
+        if(nearDock()){
+          currentMode = DOCK_ALIGN;
+        }
+        break;
+
+      case DOCK_ALIGN:
+        dockAlign();
+
+        currentMode = COMPLETE;
+        break;
+      case COMPLETE:
+        Serial.println("STATE: COMPLETE");
+        motors.setSpeeds(0, 0);
+        break;
   }
 
-  // Go forward 60 cm
-  /*moveForward(20.0);
-  //delay(500);
-
-  moveForward(20.0);
-  delay(500);
-
-  moveForward(20.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 100 cm
-  wallLeft(100.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallRight(40.0);
-  delay(500);
-
-  // Turn right
-  rightTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallRight(20.0);
-  delay(500);
-
-  // Turn right
-  rightTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallLeft(20.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallLeft(20.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallLeft(40.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 60 cm
-  wallLeft(60.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallLeft(20.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallRight(40.0);
-  delay(500);
-
-  // U-turn
-  uTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallLeft(40.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 60 cm
-  wallLeft(60.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallRight(40.0);
-  delay(500);
-
-  // Turn right
-  rightTurn();
-  delay(500);
-
-  // Go forward 60 cm
-  wallRight(60.0);
-  delay(500);
-
-  // Turn right
-  rightTurn();
-  delay(500);
-
-  // Go forward 40 cm
-  wallLeft(40.0);
-  delay(500);
-
-  // U-turn
-  uTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallRight(20.0);
-  delay(500);
-
-  // Turn left
-  leftTurn();
-  delay(500);
-
-  // Go forward 20 cm
-  wallLeft(20.0);
-  delay(500);
-
-  Serial.println("=== REVERSE PATH ===");
-  delay(2000);
-
-  // Go forward 20 cm (reversed: wallRight)
-  wallRight(20.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 20 cm (reversed: wallRight)
-  wallRight(20.0);
-  delay(500);
-
-  // U-turn
-  uTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallLeft)
-  wallLeft(40.0);
-  delay(500);
-
-  // Turn left (reversed: leftTurn)
-  leftTurn();
-  delay(500);
-
-  // Go forward 60 cm (reversed: wallLeft)
-  wallLeft(60.0);
-  delay(500);
-
-  // Turn left (reversed: leftTurn)
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallLeft)
-  wallLeft(40.0);
-  delay(500);
-
-  // Turn left (reversed: leftTurn)
-  leftTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallRight)
-  wallRight(40.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 60 cm (reversed: wallRight)
-  wallRight(60.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallRight)
-  wallRight(40.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallRight)
-  wallRight(40.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 20 cm (reversed: wallRight)
-  wallRight(20.0);
-  delay(500);
-
-  // Turn right (reversed: rightTurn)
-  rightTurn();
-  delay(500);
-
-  // Go forward 40 cm (reversed: wallLeft)
-  wallLeft(40.0);
-  delay(500);
-
-  // Turn left (reversed: leftTurn)
-  leftTurn();
-  delay(500);
-
-  // Go forward 100 cm (reversed: wallLeft)
-  wallLeft(100.0);
-  delay(500);
-
-  // Turn left (reversed: leftTurn)
-  leftTurn();
-  delay(500);
-
-  // Go forward 60 cm (reversed: wallLeft)
-  wallLeft(60.0);
-  delay(500);*/
-
   Serial.println("=== MISSION COMPLETE!  ===");
-  //while(1);
 }
 
 
 // =============== MOVE FORWARD ================================
 void moveForward(float targetDist) {
+  // Reset encoders to get accurate target distance
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
   float distanceTraveled = 0;
@@ -345,53 +161,26 @@ void moveForward(float targetDist) {
     float distPerCount = (PI * diaL) / countsPerRev;
     float avgCounts = (leftTotal + rightTotal) / 2.0;
     distanceTraveled = avgCounts * distPerCount;
-/*
-    // ===== PHASE 3/4: CHECK SURFACE TYPE =====
-    lineSensors.readCalibrated(lineDetectionValues);
-    uint16_t centerSensor = lineDetectionValues[2];
 
-    // PHASE 3: Black square detection
-    if (centerSensor >= BLACK_THRESHOLD) {
-      Serial.println("BLACK SQUARE DETECTED!  Picking...");
-      motors.setSpeeds(0, 0);
-      delay(200);
-
-      // 360° spin
-      motors.setSpeeds(50, -50);
-      delay(3600);
-      motors.setSpeeds(0, 0);
-      delay(200);
-
-      // Reset distance tracking
-      encoders.getCountsAndResetLeft();
-      encoders.getCountsAndResetRight();
-      leftTotal = 0;
-      rightTotal = 0;
-      distanceTraveled = 0;
-      continue;
-    }
-
-    // PHASE 4: Blue line detection (speed up)
-    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
-      currentSpeed = FAST_SPEED;
-    } else {
-      currentSpeed = BASE_SPEED;
-    }
-*/  
+    // Update theta
     theta = (deltaR - deltaL) / w;
 
+    // Adjust theta to correct itself to be in a straight line.
     PDout = PDcontroller.update(theta, goal_theta);
     motors.setSpeeds(int(currentSpeed), int(currentSpeed));
   }
 
+  // Stop
   motors.setSpeeds(0, 0);
-  currentSpeed = BASE_SPEED;
+
 }
 
 // ====================== WALL FOLLOW LEFT ======================
 void wallLeft(float targetDist) {
+  // Look left
   servo.write(180);
 
+  // Ensure proper reset.
   encoders.getCountsAndResetLeft();
   encoders.getCountsAndResetRight();
   float distanceTraveled = 0;
@@ -409,114 +198,28 @@ void wallLeft(float targetDist) {
     float avgCounts = (leftTotal + rightTotal) / 2.0;
     distanceTraveled = avgCounts * distPerCount;
 
-    wallDist = sonar.readDist();
-    Serial.println(wallDist);
-/*
-    // ===== PHASE 3/4: CHECK SURFACE TYPE =====
-    lineSensors.readCalibrated(lineDetectionValues);
-    uint16_t centerSensor = lineDetectionValues[2];
+    currentDistFromWall = sonar.readDist();
+    Serial.println(currentDistFromWall);
 
-    // PHASE 3: Black square detection
-    if (centerSensor >= BLACK_THRESHOLD) {
-      Serial.println("BLACK SQUARE DETECTED!  Picking...");
-      motors.setSpeeds(0, 0);
-      delay(200);
 
-      // 360° spin
-      motors.setSpeeds(50, -50);
-      delay(3600);
-      motors.setSpeeds(0, 0);
-      delay(200);
-
-      // Reset distance tracking
-      encoders.getCountsAndResetLeft();
-      encoders.getCountsAndResetRight();
-      leftTotal = 0;
-      rightTotal = 0;
-      distanceTraveled = 0;
-      continue;
-    }
-
-    // PHASE 4: Blue line detection (speed up)
-    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
-      currentSpeed = FAST_SPEED;
-    } else {
-      currentSpeed = BASE_SPEED;
-    }
-*/
     // Get PD output
-    PDout = PDcontroller.update(wallDist, distFromWall);
-    motors.setSpeeds(int(currentSpeed - PDout), int(currentSpeed + PDout));
+    PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+
+    // Left = positive, right = negative
+    int leftCmd = (int)(currentSpeed + PDout);
+    int rightCmd = (int)(currentSpeed - PDout);
+
+    // Constrain max 400 speed
+    leftCmd  = constrain(leftCmd,  -400, 400);
+    rightCmd = constrain(rightCmd, -400, 400);
+
+    motors.setSpeeds(leftCmd, rightCmd);
   }
 
-  //motors.setSpeeds(0, 0);
-  //currentSpeed = BASE_SPEED;
-}
-
-// ====================== WALL FOLLOW RIGHT ======================
-void wallRight(float targetDist) {
-  servo.write(0);
-
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-  float distanceTraveled = 0;
-  int16_t leftTotal = 0;
-  int16_t rightTotal = 0;
-
-  while(distanceTraveled < targetDist) {
-    deltaL = encoders.getCountsAndResetLeft();
-    deltaR = encoders.getCountsAndResetRight();
-    leftTotal += deltaL;
-    rightTotal += deltaR;
-
-    float countsPerRev = nL * gearRatio;
-    float distPerCount = (PI * diaL) / countsPerRev;
-    float avgCounts = (leftTotal + rightTotal) / 2.0;
-    distanceTraveled = avgCounts * distPerCount;
-
-    wallDist = sonar.readDist();
-    Serial.println(wallDist);
-/*
-    // ===== PHASE 3/4: CHECK SURFACE TYPE =====
-    lineSensors.readCalibrated(lineDetectionValues);
-    uint16_t centerSensor = lineDetectionValues[2];
-
-    // PHASE 3: Black square detection
-    if (centerSensor >= BLACK_THRESHOLD) {
-      Serial.println("BLACK SQUARE DETECTED! Picking...");
-      motors.setSpeeds(0, 0);
-      delay(200);
-
-      // 360° spin
-      motors.setSpeeds(50, -50);
-      delay(3600);
-      motors.setSpeeds(0, 0);
-      delay(200);
-
-      // Reset distance tracking
-      encoders.getCountsAndResetLeft();
-      encoders.getCountsAndResetRight();
-      leftTotal = 0;
-      rightTotal = 0;
-      distanceTraveled = 0;
-      continue;
-    }
-
-    // PHASE 4: Blue line detection (speed up)
-    if (centerSensor >= BLUE_MIN_CAL && centerSensor <= BLUE_MAX_CAL) {
-      currentSpeed = FAST_SPEED;
-    } else {
-      currentSpeed = BASE_SPEED;
-    }
-*/
-    // Get PD output
-    PDout = PDcontroller.update(wallDist, distFromWall);
-    motors.setSpeeds(int(currentSpeed + PDout), int(currentSpeed - PDout));
-  }
-
+  // After task is done stop motors.
   motors.setSpeeds(0, 0);
-  currentSpeed = BASE_SPEED;
 }
+
 
 // ====================== TURN FUNCTIONS ======================
 void leftTurn() {
@@ -559,4 +262,32 @@ void calibrateSensors() {
   
   motors.setSpeeds(0, 0);
   Serial.println("Calibration complete!");
+}
+
+// ======================= EXPLORE ============================
+void explore(){
+  // Mark visited cells
+}
+
+void blackSquareDetected(){
+
+}
+
+//====================== LINE FOLLOW ==========================
+bool computeBlueLinePosition(){
+
+}
+
+void linefollowing(){
+
+}
+
+// ====================== Pick service duties =====================
+void pick_service(){
+
+}
+
+// ================= Return home ================================
+void returnHome(){
+
 }
