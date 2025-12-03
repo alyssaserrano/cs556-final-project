@@ -16,12 +16,12 @@ using namespace Pololu3piPlus32U4;
 
 #define minOutput -100
 #define maxOutput 100
-#define kp 2.0
-#define kd 0.4
+#define kp 1.0
+#define kd 0.6
 #define BASE_SPEED 100
 #define FAST_SPEED 200
-#define WALL_DIST 20
-#define FRONT_OBSTACLE_DIST 15
+#define WALL_DIST 10
+#define FRONT_OBSTACLE_DIST 10
 
 // Phase 3/4: IR Sensor Detection
 #define BLUE_MIN_CAL 200
@@ -39,6 +39,7 @@ OLED display;
 Servo servo;
 
 // ====================== STATE VARIABLES ======================
+float frontWallDist;
 float currentDistFromWall;
 float desiredDistFromWall = WALL_DIST;
 int PDout = 0;
@@ -61,7 +62,7 @@ void setup() {
   Serial.begin(9600);
   delay(2000);
   servo.attach(5);
-  servo.write(0);
+  servo.write(180);
   delay(40);
 
   // Calibrate line sensors for Phase 3/4
@@ -85,25 +86,28 @@ void loop() {
         // Mark down visited cell
         explore();
 
+        // Check to make sure if there is no wall in front.
+        checkFrontWall();
+
         // Check center of square for black.
-        if(blackSquareDetected()){
+        /*if(blackSquareDetected()){
           currentMode = PICK_SERVICE;
         }
 
         // Check if there is a blue line.
         if(computeBlueLinePosition()){
           currentMode = LINE_FOLLOWING;
-        }
+        }*/
         break;
       case LINE_FOLLOWING:
-        linefollowing();
+        // TODO: linefollowing();
         leftTurn();
         currentMode = EXPLORE;
 
         break;
       case PICK_SERVICE:
         Serial.println("State: Pick_service!");
-        pick_service();
+        // TODO: pick_service();
         pickCount++;
       
         currentMode = CHECK_GOALS;
@@ -120,15 +124,15 @@ void loop() {
         break;
 
       case RETURN_HOME:
-        returnHome();
+        /*returnHome();
 
         if(nearDock()){
           currentMode = DOCK_ALIGN;
         }
-        break;
+        break;*/
 
       case DOCK_ALIGN:
-        dockAlign();
+        //dockAlign();
 
         currentMode = COMPLETE;
         break;
@@ -199,7 +203,7 @@ void wallLeft(float targetDist) {
     distanceTraveled = avgCounts * distPerCount;
 
     currentDistFromWall = sonar.readDist();
-    Serial.println(currentDistFromWall);
+    //Serial.println(currentDistFromWall);
 
 
     // Get PD output
@@ -218,20 +222,21 @@ void wallLeft(float targetDist) {
 
   // After task is done stop motors.
   motors.setSpeeds(0, 0);
+  delay(500);
 }
 
 
 // ====================== TURN FUNCTIONS ======================
-void leftTurn() {
-  Serial.println("LEFT TURN");
+void rightTurn() {
+  Serial.println("RIGHT TURN");
   motors.setSpeeds(50, -50);
   delay(1800);
   motors.setSpeeds(0, 0);
   delay(200);
 }
 
-void rightTurn() {
-  Serial.println("RIGHT TURN");
+void leftTurn() {
+  Serial.println("LEFT TURN");
   motors. setSpeeds(-50, 50);
   delay(1800);
   motors. setSpeeds(0, 0);
@@ -267,13 +272,28 @@ void calibrateSensors() {
 // ======================= EXPLORE ============================
 void explore(){
   // Wall follow per grid
+  Serial.println("WallLeft Called");
   wallLeft(20.0);
 
   // Mark correct square as visited
   
 }
 
-void blackSquareDetected(){
+// ================ FRONT WALL OBSTACLE AVOIDANCE ==============================
+bool checkFrontWall(){
+
+    // Incrementally check for front wall
+  servo.write(90);
+  delay(1000);
+  frontWallDist = sonar.readDist();
+
+  // This shows there is a front wall, therefore we have to turn the robot body.
+  if(frontWallDist < FRONT_OBSTACLE_DIST){
+    rightTurn();
+  }
+}
+
+/*void blackSquareDetected(){
 
 }
 
@@ -294,4 +314,4 @@ void pick_service(){
 // ================= Return home ================================
 void returnHome(){
 
-}
+}*/
