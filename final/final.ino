@@ -266,7 +266,11 @@ void calibrateSensors() {
 
 // ======================= EXPLORE ============================
 void explore(){
-  // Mark visited cells
+  // Wall follow per grid
+  wallLeft(20.0);
+
+  // Mark correct square as visited
+  
 }
 
 void blackSquareDetected(){
