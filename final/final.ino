@@ -51,8 +51,11 @@ float theta;
 int pickCount = 0;
 int lineCenter = 2000;
 
+// ==================== MAP VARIABLES ============================
+float gridSize = 20.0;
+
 // FSA (Finite States)
-enum State { EXIT_DOCK, EXPLORE, PICK_SERVICE, CHECK_GOALS, RETURN_HOME, DOCK_ALIGN, COMPLETE, LINE_FOLLOWING };
+enum State { EXIT_DOCK, EXPLORE, PICK_SERVICE, CHECK_GOALS, RETURN_HOME, DOCK_ALIGN, COMPLETE, LINE_FOLLOWING, PREPARE_HOME };
 State currentMode;
 
 // Sensor readings
@@ -76,16 +79,18 @@ void setup() {
 
 // ====================== MAIN CONTROL LOOP ======================
 void loop() {
-  Serial.println("=== FORWARD PATH ===");
+  Serial.println("===== FSA BEGIN!!! =====");
 
   uint16_t cal[5];  // Declare ONCE for the switch cases
   uint16_t linePos;
   
+    // FSA Logic
     switch(currentMode){
       case EXIT_DOCK:
         moveForward(20.0);
         currentMode = EXPLORE;
         break;
+
       case EXPLORE:
         // Mark down visited cell
         explore();
@@ -93,7 +98,7 @@ void loop() {
         // Check to make sure if there is no wall in front.
         checkFrontWall();
 
-        // Check center of square for black.
+        // Check center of square for black if it is, IMMEDIATELY execute next state.
         if(blackSquareDetected()){
           currentMode = PICK_SERVICE;
           break;
@@ -104,8 +109,10 @@ void loop() {
 
         if(computeBlueLinePosition(cal, linePos)){
           currentMode = LINE_FOLLOWING;
+          break;
         }
         break;
+
       case LINE_FOLLOWING:
         lineFollowing();
         lineSensors.readCalibrated(cal);
@@ -114,11 +121,11 @@ void loop() {
           currentMode = EXPLORE;
         }
         break;
+
       case PICK_SERVICE:
         Serial.println("State: Pick_service!");
         // TODO: pick_service();
         pickCount++;
-      
         currentMode = CHECK_GOALS;
         break;
 
@@ -128,23 +135,36 @@ void loop() {
           currentMode = EXPLORE;
         }
         else{
-          currentMode = RETURN_HOME;
+          currentMode = PREPARE_HOME;
         }
+        break;
+
+      case PREPARE_HOME:
+        // Turn 180 to prepare for right wall follow
+        // Turn left 2x which equals 180 degress
+        leftTurn();
+        leftTurn();
+        currentMode = RETURN_HOME;
         break;
 
       case RETURN_HOME:
-        /*returnHome();
+        // Move per grid, check if there is a front wall.
+        returnHome();
 
-        if(nearDock()){
-          currentMode = DOCK_ALIGN;
+        // Check if there is a blue line.
+        lineSensors.readCalibrated(cal);
+
+        // Zoom if we have detected the blue line.
+        if(computeBlueLinePosition(cal, linePos)){
+          currentMode = LINE_FOLLOWING;
         }
-        break;*/
+        break;
 
       case DOCK_ALIGN:
         //dockAlign();
-
         currentMode = COMPLETE;
         break;
+
       case COMPLETE:
         Serial.println("STATE: COMPLETE");
         motors.setSpeeds(0, 0);
@@ -185,10 +205,11 @@ void moveForward(float targetDist) {
 
   // Stop
   motors.setSpeeds(0, 0);
+  delay(10);
 
 }
 
-// ====================== WALL FOLLOW LEFT ======================
+// ====================== WALL FOLLOW  ======================
 void wallLeft(float targetDist) {
   // Look left
   servo.write(180);
@@ -200,6 +221,7 @@ void wallLeft(float targetDist) {
   int16_t leftTotal = 0;
   int16_t rightTotal = 0;
 
+  // Continue to travel till you reach the goal distance.
   while(distanceTraveled < targetDist) {
     deltaL = encoders.getCountsAndResetLeft();
     deltaR = encoders. getCountsAndResetRight();
@@ -232,6 +254,51 @@ void wallLeft(float targetDist) {
   // After task is done stop motors.
   motors.setSpeeds(0, 0);
   delay(500);
+}
+
+void wallRight(float targetDist) {
+  // Look right
+  servo.write(0);
+
+  // Ensure proper reset.
+  encoders.getCountsAndResetLeft();
+  encoders.getCountsAndResetRight();
+  float distanceTraveled = 0;
+  int16_t leftTotal = 0;
+  int16_t rightTotal = 0;
+
+  // Continue to travel till you reach the goal distance.
+  while(distanceTraveled < targetDist) {
+    deltaL = encoders.getCountsAndResetLeft();
+    deltaR = encoders. getCountsAndResetRight();
+    leftTotal += deltaL;
+    rightTotal += deltaR;
+
+    float countsPerRev = nL * gearRatio;
+    float distPerCount = (PI * diaL) / countsPerRev;
+    float avgCounts = (leftTotal + rightTotal) / 2.0;
+    distanceTraveled = avgCounts * distPerCount;
+
+    currentDistFromWall = sonar.readDist();
+    //Serial.println(currentDistFromWall);
+
+
+    // Get PD output
+    PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+
+    // Left = negative, right = positive
+    int leftCmd = (int)(currentSpeed - PDout);
+    int rightCmd = (int)(currentSpeed + PDout);
+
+    // Constrain max 400 speed
+    leftCmd  = constrain(leftCmd,  -400, 400);
+    rightCmd = constrain(rightCmd, -400, 400);
+
+    motors.setSpeeds(leftCmd, rightCmd);
+  }
+  
+  motors.setSpeeds(0, 0);
+  delay(10);
 }
 
 
@@ -282,7 +349,7 @@ void calibrateSensors() {
 void explore(){
   // Wall follow per grid
   Serial.println("WallLeft Called");
-  wallLeft(20.0);
+  wallLeft(gridSize);
 
   // Mark correct square as visited
   
@@ -291,14 +358,18 @@ void explore(){
 // ================ FRONT WALL OBSTACLE AVOIDANCE ==============================
 bool checkFrontWall(){
 
-    // Incrementally check for front wall
+  // Incrementally check for front wall
   servo.write(90);
-  delay(1000);
+  delay(500);
   frontWallDist = sonar.readDist();
 
-  // This shows there is a front wall, therefore we have to turn the robot body.
-  if(frontWallDist < FRONT_OBSTACLE_DIST){
+  // This shows there is a front wall, therefore we have to turn the robot body if we are still looking for goals.
+  // Else the robot's body will be oriented for right follow therefore having to make left turns rather than right.
+  if(frontWallDist < FRONT_OBSTACLE_DIST && currentMode != RETURN_HOME){
     rightTurn();
+  }
+  else{
+    leftTurn();
   }
 }
 
@@ -367,13 +438,17 @@ void lineFollowing(){
   Serial.print(" PD: ");
   Serial.println(PDout);
 }
-/*
-// ====================== Pick service duties =====================
-void pick_service(){
 
-}
+// ====================== Pick service duties =====================
+/*void pick_service(){
+
+}*/
 
 // ================= Return home ================================
 void returnHome(){
 
-}*/
+  // To go home we need to do the same approach as explore/navigate but with right wall follow.
+  wallRight(gridSize);
+
+  checkFrontWall();
+}
