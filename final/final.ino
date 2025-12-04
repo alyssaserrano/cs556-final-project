@@ -108,7 +108,6 @@ void loop() {
       case LINE_FOLLOWING:
         lineFollowing();
 
-        uint16_t cal[5];
         lineSensors.readCalibrated(cal);
         uint16_t checkPos;
         
