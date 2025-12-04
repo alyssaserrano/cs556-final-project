@@ -124,8 +124,8 @@ void loop() {
 
       case PICK_SERVICE:
         Serial.println("State: Pick_service!");
-        // TODO: pick_service();
-        pickCount++;
+        pick_service();
+      
         currentMode = CHECK_GOALS;
         break;
 
@@ -440,9 +440,34 @@ void lineFollowing(){
 }
 
 // ====================== Pick service duties =====================
-/*void pick_service(){
-
-}*/
+void pick_service(){
+  Serial.println("PICK SERVICE ACTIVATED");
+  
+  // Stop immediately
+  motors.setSpeeds(0, 0);
+  delay(200);
+  
+  // Perform 360° rotation
+  Serial.println("Performing 360 rotation...");
+  motors.setSpeeds(50, -50);  // Turn right
+  delay(7200);  // 4 × 1800 for full 360°
+  motors.setSpeeds(0, 0);
+  delay(200);
+  
+  // Increment pick count
+  pickCount++;
+  
+  // Display pick count on OLED
+  display.clear();
+  display.print("Pick #");
+  display.println(pickCount);
+  display.gotoXY(0, 1);
+  display.print("Goal: 3");
+  delay(1500);
+  
+  Serial.print("Pick count: ");
+  Serial.println(pickCount);
+}
 
 // ================= Return home ================================
 void returnHome(){
