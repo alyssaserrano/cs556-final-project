@@ -20,8 +20,8 @@ using namespace Pololu3piPlus32U4;
 #define maxOutput 100
 #define kp 25
 #define kd 10
-#define BASE_SPEED 200
-#define FAST_SPEED 300
+#define BASE_SPEED 100
+#define FAST_SPEED 200
 #define WALL_DIST 10
 #define FRONT_OBSTACLE_DIST 10
 
@@ -49,6 +49,7 @@ Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
 Servo servo;
+Buzzer buzzer;
 
 // ====================== STATE VARIABLES ======================
 float frontWallDist;
@@ -110,31 +111,37 @@ void loop() {
         // Mark down visited cell
         // Localizes with odometry + controller.
         explore();
-        
+
 
         // Check to make sure if there is no wall in front.
         checkFrontWall();
 
         // Check center of square for black if it is, IMMEDIATELY execute next state.
-        if(blackSquareDetected()){
+        /*if(blackSquareDetected()){
           currentMode = PICK_SERVICE;
           break;
-        }
+        }*/
         
         // Check if there is a blue line.
         lineSensors.readCalibrated(cal);
 
-        if(computeBlueLinePosition(cal, linePos)){
+        unint16_t flag = cal[2];
+        if (flag > BLACK_THRESHOLD){
+          currentMode = PICK_SERVICE;
+          break;
+        }
+        else if(flag >= BLUE_MIN_CAL && flag < BLUE_MAX_CAL){
           currentMode = LINE_FOLLOWING;
           break;
         }
+
         break;
 
       case LINE_FOLLOWING:
         lineFollowing();
         lineSensors.readCalibrated(cal);
         
-        if(! computeBlueLinePosition(cal, linePos)){  // Checks if OFF the line
+        if(computeBlueLinePosition(cal, linePos) == false){  // Checks if OFF the line
           currentMode = EXPLORE;
         }
         break;
@@ -166,6 +173,11 @@ void loop() {
 
       case RETURN_HOME:
         // Move per grid, check if there is a front wall.
+        /*
+        if(traveled == 0){
+          currentMode = DOCK_ALIGN;
+        }*/
+
         returnHome();
 
         // Check if there is a blue line.
@@ -178,7 +190,7 @@ void loop() {
         break;
       // TODO: DOCK ALIGN, identify the half black half white square.
       case DOCK_ALIGN:
-        //dockAlign();
+        dockAlign();
         currentMode = COMPLETE;
         break;
 
@@ -373,6 +385,9 @@ void explore(){
   // Wall follow per grid
   Serial.println("WallLeft Called");
   wallLeft(gridSize);
+  //traveled++;
+  Serial.print("Tiles counted: ");
+  Serial.println(traveled);
 
   // TODO: Mark correct square as visited
   
@@ -498,6 +513,13 @@ void returnHome(){
   // To go home we need to do the same approach as explore/navigate but with right wall follow.
   // Again localizing with odometry.
   wallRight(gridSize);
+  //traveled--;
+  Serial.print("Tiles remaining: ");
+  Serial.println(traveled);
 
   checkFrontWall();
+}
+
+void dockAlign(){
+  buzzer.play("L4 g");
 }
