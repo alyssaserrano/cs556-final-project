@@ -49,6 +49,7 @@ long deltaR = 0;
 const float goal_theta;
 float theta;
 int pickCount = 0;
+int lineCenter = 2000;
 
 // FSA (Finite States)
 enum State { EXIT_DOCK, EXPLORE, PICK_SERVICE, CHECK_GOALS, RETURN_HOME, DOCK_ALIGN, COMPLETE, LINE_FOLLOWING };
@@ -76,6 +77,9 @@ void setup() {
 // ====================== MAIN CONTROL LOOP ======================
 void loop() {
   Serial.println("=== FORWARD PATH ===");
+
+  uint16_t cal[5];  // Declare ONCE for the switch cases
+  uint16_t linePos;
   
     switch(currentMode){
       case EXIT_DOCK:
@@ -90,20 +94,25 @@ void loop() {
         checkFrontWall();
 
         // Check center of square for black.
-        /*if(blackSquareDetected()){
+        if(blackSquareDetected()){
           currentMode = PICK_SERVICE;
+          break;
         }
-
+        
         // Check if there is a blue line.
-        if(computeBlueLinePosition()){
+        lineSensors.readCalibrated(cal);
+
+        if(computeBlueLinePosition(cal, linePos)){
           currentMode = LINE_FOLLOWING;
-        }*/
+        }
         break;
       case LINE_FOLLOWING:
-        // TODO: linefollowing();
-        leftTurn();
-        currentMode = EXPLORE;
-
+        lineFollowing();
+        lineSensors.readCalibrated(cal);
+        
+        if(! computeBlueLinePosition(cal, linePos)){  // Checks if OFF the line
+          currentMode = EXPLORE;
+        }
         break;
       case PICK_SERVICE:
         Serial.println("State: Pick_service!");
@@ -293,19 +302,72 @@ bool checkFrontWall(){
   }
 }
 
-/*void blackSquareDetected(){
+bool blackSquareDetected(){
+  uint16_t cal[5];
+  lineSensors.readCalibrated(cal);
+  
+  // Check center sensor for black square
+  uint16_t centerVal = cal[2];
+  
+  if(centerVal >= BLACK_THRESHOLD){
+    Serial.println("BLACK SQUARE DETECTED!");
+    return true;
+  }
+  return false;
 
 }
 
 //====================== LINE FOLLOW ==========================
-bool computeBlueLinePosition(){
+bool computeBlueLinePosition(uint16_t cal[5], uint16_t &position){  
+  uint32_t weightedSum = 0;
+  uint32_t total = 0;
 
+  for(int i = 0; i < 5; i++){
+    int val = cal[i];
+    
+    if(val >= BLUE_MIN_CAL && val <= BLUE_MAX_CAL){
+      int v = val - BLUE_MIN_CAL;
+      int pos = i * 1000;
+      
+      weightedSum += (uint32_t)v * pos;
+      total += v;
+    }
+  }
+
+  if(total == 0){
+    return false;
+  }
+
+  position = weightedSum / total;
+  return true;
 }
 
-void linefollowing(){
+void lineFollowing(){
+  uint16_t cal[5];
+  lineSensors.readCalibrated(cal);
 
+  uint16_t position;
+  computeBlueLinePosition(cal, position);
+
+
+  // Target center position
+  int PDout = PDcontroller.update(position, lineCenter);
+
+  int leftSpeed = FAST_SPEED + PDout;
+  int rightSpeed = FAST_SPEED - PDout;
+  
+  // Constrain speeds
+  leftSpeed = constrain(leftSpeed, -400, 400);
+  rightSpeed = constrain(rightSpeed, -400, 400);
+  
+  motors.setSpeeds(leftSpeed, rightSpeed);
+
+  Serial.print("FOLLOWING - Pos: ");
+  Serial.print(position);
+  Serial.print(" PD: ");
+  Serial.println(PDout);
 }
-
+/*
 // ====================== Pick service duties =====================
 void pick_service(){
 
