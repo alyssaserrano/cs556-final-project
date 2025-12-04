@@ -3,6 +3,7 @@
 #include "sonar.h"
 #include <Servo.h>
 #include "PDcontroller.h"
+#include "PIDcontroller.h"
 using namespace Pololu3piPlus32U4;
 
 // ====================== CONSTANTS ======================
@@ -14,16 +15,26 @@ using namespace Pololu3piPlus32U4;
 #define w 9.6
 #define gearRatio 75
 
+// ======================== PD VARIABLES ==================
 #define minOutput -100
 #define maxOutput 100
-#define kp 1.0
-#define kd 0.6
-#define BASE_SPEED 100
-#define FAST_SPEED 200
+#define kp 25
+#define kd 10
+#define BASE_SPEED 200
+#define FAST_SPEED 300
 #define WALL_DIST 10
 #define FRONT_OBSTACLE_DIST 10
 
-// Phase 3/4: IR Sensor Detection
+// ======================== PID VARIABLES ==================
+#define minOutputVel -100
+#define maxOutputVel 100
+#define kpVel 120 //Tune Kp here
+#define kdVel 70 //Tune Kd here
+#define kiVel 50 //Tune Ki here
+#define clamp_iVel 10 //Tune ki integral clamp here
+#define base_speedVel 200
+
+// ============= Phase 3/4: IR Sensor Detection =================
 #define BLUE_MIN_CAL 200
 #define BLUE_MAX_CAL 500
 #define BLACK_THRESHOLD 900
@@ -33,6 +44,7 @@ Motors motors;
 Encoders encoders;
 Sonar sonar(4);
 PDcontroller PDcontroller(kp, kd, minOutput, maxOutput);
+PIDcontroller PIDcontroller(kpVel, kiVel, kdVel, minOutputVel, maxOutputVel, clamp_iVel);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
@@ -50,6 +62,8 @@ const float goal_theta;
 float theta;
 int pickCount = 0;
 int lineCenter = 2000;
+int traveled = 0;
+
 
 // ==================== MAP VARIABLES ============================
 float gridSize = 20.0;
@@ -92,8 +106,11 @@ void loop() {
         break;
 
       case EXPLORE:
+        checkFrontWall();
         // Mark down visited cell
+        // Localizes with odometry + controller.
         explore();
+        
 
         // Check to make sure if there is no wall in front.
         checkFrontWall();
@@ -159,7 +176,7 @@ void loop() {
           currentMode = LINE_FOLLOWING;
         }
         break;
-
+      // TODO: DOCK ALIGN, identify the half black half white square.
       case DOCK_ALIGN:
         //dockAlign();
         currentMode = COMPLETE;
@@ -171,7 +188,7 @@ void loop() {
         break;
   }
 
-  Serial.println("=== MISSION COMPLETE!  ===");
+  Serial.println("=== SWITCH COMPLETED ===");
 }
 
 
@@ -237,8 +254,11 @@ void wallLeft(float targetDist) {
     //Serial.println(currentDistFromWall);
 
 
-    // Get PD output
+    // Get PD output or PID output
+    // Remember placedholders: PDcontroller.update(ACTUAL DISTANCE, IDEAL TARGET DISTANCE TO MAINTAIN)
     PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+    // Uncomment when wanting PID option.
+    //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = positive, right = negative
     int leftCmd = (int)(currentSpeed + PDout);
@@ -283,8 +303,11 @@ void wallRight(float targetDist) {
     //Serial.println(currentDistFromWall);
 
 
-    // Get PD output
+    // Get PD or PID output to adjust wheel speed.
+    // Remember placedholders: PDcontroller.update(ACTUAL DISTANCE, IDEAL TARGET DISTANCE TO MAINTAIN)
     PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+    // Uncomment when wanting PID option.
+    //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = negative, right = positive
     int leftCmd = (int)(currentSpeed - PDout);
@@ -351,16 +374,16 @@ void explore(){
   Serial.println("WallLeft Called");
   wallLeft(gridSize);
 
-  // Mark correct square as visited
+  // TODO: Mark correct square as visited
   
 }
 
 // ================ FRONT WALL OBSTACLE AVOIDANCE ==============================
-bool checkFrontWall(){
+void checkFrontWall(){
 
   // Incrementally check for front wall
   servo.write(90);
-  delay(500);
+  delay(100);
   frontWallDist = sonar.readDist();
 
   // This shows there is a front wall, therefore we have to turn the robot body if we are still looking for goals.
@@ -368,7 +391,7 @@ bool checkFrontWall(){
   if(frontWallDist < FRONT_OBSTACLE_DIST && currentMode != RETURN_HOME){
     rightTurn();
   }
-  else{
+  else if (frontWallDist < FRONT_OBSTACLE_DIST){
     leftTurn();
   }
 }
@@ -473,6 +496,7 @@ void pick_service(){
 void returnHome(){
 
   // To go home we need to do the same approach as explore/navigate but with right wall follow.
+  // Again localizing with odometry.
   wallRight(gridSize);
 
   checkFrontWall();
