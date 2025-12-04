@@ -3,6 +3,7 @@
 #include "sonar.h"
 #include <Servo.h>
 #include "PDcontroller.h"
+#include "PIDcontroller.h"
 using namespace Pololu3piPlus32U4;
 
 // ====================== CONSTANTS ======================
@@ -23,7 +24,16 @@ using namespace Pololu3piPlus32U4;
 #define WALL_DIST 10
 #define FRONT_OBSTACLE_DIST 10
 
-// Phase 3/4: IR Sensor Detection
+// ======================== PID VARIABLES ==================
+#define minOutputVel -200
+#define maxOutputVel 200
+#define kpVel 30 //Tune Kp here
+#define kdVel 10 //Tune Kd here
+#define kiVel 7 //Tune Ki here
+#define clamp_iVel 10 //Tune ki integral clamp here
+#define base_speedVel 200
+
+// ============= Phase 3/4: IR Sensor Detection =================
 #define BLUE_MIN_CAL 200
 #define BLUE_MAX_CAL 500
 #define BLACK_THRESHOLD 900
@@ -33,6 +43,7 @@ Motors motors;
 Encoders encoders;
 Sonar sonar(4);
 PDcontroller PDcontroller(kp, kd, minOutput, maxOutput);
+PIDcontroller PIDcontroller(kpVel, kiVel, kdVel, minOutputVel, maxOutputVel, clamp_iVel);
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio);
 LineSensors lineSensors;
 OLED display;
@@ -93,6 +104,7 @@ void loop() {
 
       case EXPLORE:
         // Mark down visited cell
+        // Localizes with odometry + controller.
         explore();
 
         // Check to make sure if there is no wall in front.
@@ -159,7 +171,7 @@ void loop() {
           currentMode = LINE_FOLLOWING;
         }
         break;
-
+      // TODO: DOCK ALIGN, identify the half black half white square.
       case DOCK_ALIGN:
         //dockAlign();
         currentMode = COMPLETE;
@@ -237,8 +249,11 @@ void wallLeft(float targetDist) {
     //Serial.println(currentDistFromWall);
 
 
-    // Get PD output
+    // Get PD output or PID output
+    // Remember placedholders: PDcontroller.update(ACTUAL DISTANCE, IDEAL TARGET DISTANCE TO MAINTAIN)
     PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+    // Uncomment when wanting PID option.
+    //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = positive, right = negative
     int leftCmd = (int)(currentSpeed + PDout);
@@ -283,8 +298,11 @@ void wallRight(float targetDist) {
     //Serial.println(currentDistFromWall);
 
 
-    // Get PD output
+    // Get PD or PID output to adjust wheel speed.
+    // Remember placedholders: PDcontroller.update(ACTUAL DISTANCE, IDEAL TARGET DISTANCE TO MAINTAIN)
     PDout = PDcontroller.update(currentDistFromWall, desiredDistFromWall);
+    // Uncomment when wanting PID option.
+    //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = negative, right = positive
     int leftCmd = (int)(currentSpeed - PDout);
@@ -351,7 +369,7 @@ void explore(){
   Serial.println("WallLeft Called");
   wallLeft(gridSize);
 
-  // Mark correct square as visited
+  // TODO: Mark correct square as visited
   
 }
 
@@ -441,6 +459,7 @@ void lineFollowing(){
 
 // ====================== Pick service duties =====================
 /*void pick_service(){
+  // TODO: REVIEW CODE
 
 }*/
 
@@ -448,6 +467,7 @@ void lineFollowing(){
 void returnHome(){
 
   // To go home we need to do the same approach as explore/navigate but with right wall follow.
+  // Again localizing with odometry.
   wallRight(gridSize);
 
   checkFrontWall();
