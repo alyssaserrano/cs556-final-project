@@ -77,6 +77,9 @@ void setup() {
 // ====================== MAIN CONTROL LOOP ======================
 void loop() {
   Serial.println("=== FORWARD PATH ===");
+
+  uint16_t cal[5];  // Declare ONCE for the switch cases
+  uint16_t linePos;
   
     switch(currentMode){
       case EXIT_DOCK:
@@ -97,21 +100,17 @@ void loop() {
         }
         
         // Check if there is a blue line.
-        uint16_t cal[5];
         lineSensors.readCalibrated(cal);
-        uint16_t bluePos;
 
-        if(computeBlueLinePosition(cal, bluePos)){
+        if(computeBlueLinePosition(cal, linePos)){
           currentMode = LINE_FOLLOWING;
         }
         break;
       case LINE_FOLLOWING:
         lineFollowing();
-
         lineSensors.readCalibrated(cal);
-        uint16_t checkPos;
         
-        if(! computeBlueLinePosition(cal, checkPos)){  // Checks if OFF the line
+        if(! computeBlueLinePosition(cal, linePos)){  // Checks if OFF the line
           currentMode = EXPLORE;
         }
         break;
