@@ -3,81 +3,45 @@
 using namespace Pololu3piPlus32U4;
 
 PIDcontroller::PIDcontroller(float kp, float ki, float kd, double minOutput, double maxOutput, double clamp_i) {
-  /*Initialize values by copying and pasting from PD controller, then declaring for
-  the three new variables.*/
   _kp = kp;
   _ki = ki;
-  _kd = kd;
-  _prevTimeMs = millis();
-  _minOutput = minOutput;
+	_kd = kd;
   _maxOutput = maxOutput;
+	_minOutput = minOutput;
   _clamp_i = clamp_i;
-
-  _error = 0.0;
-  _output = 0.0;
-  //_clampOut = 0.0;
-  _prevError = 0.0;
-  _firstUpdate = true;
-  _accumulatedError = 0.0;
+  _erracc = 0.0;
+	_lastError = 0.0;
+	_error = 0.0;
+	_output = 0.0;
+	_clampOut = 0.0;
+	_previousTime = 0.0;
+	_currentTime = millis();
 }
 
 double PIDcontroller::update(double value, double target_value){
-  /*Now copy and paste your PD controller. To implement I component,
-  keep track of accumulated error, use your accumulated error in the constrain
-  function for the integral, multiply ki by your integral, then add your p, d,
-  and i components.
+  _error = value - target_value;
+  _erracc += _error;
   
-  Note: Do not just put all of the integral code at the end of PD component. Think
-  about step by step how you can integrate these parts into your PDController
-  code.*/
-  // Instantiate variables (P + I + D) terms
-  float _de = 0.0;
-  float d_term = 0.0;
-  float i_term = 0.0;
-  float p_term = 0.0;
+  _currentTime = millis();
 
-
-  // 1) Error
-  _error = target_value - value;
-
-  // 2) dt in seconds (same as PD controller)
-  unsigned long curr_time = millis();
-  float dt;
-
-  // In seconds
-  dt = (curr_time - _prevTimeMs) / 1000.0;
-
-  // 3) PID output
-  // P
-  p_term = _kp * _error;
-
-  // I term
-  // To get the accumulated error (Error over time) you have to multiply the error by the time
-  float _accumulatedError = _accumulatedError + (_error * dt);
-  i_term = _ki * constrain(_accumulatedError, -_clamp_i, _clamp_i);
-
-  // D term
-  // Check if it is the first update. If so you have to initialize de and d_term = 0.
-  if (_firstUpdate == false){
-    _de = _error - _prevError;
-    d_term = _kd * (_de / dt);
+  double p = _kp*_error;
+  double integral = constrain(_erracc*(_currentTime-_previousTime), -_clamp_i, _clamp_i);
+  double i = _ki*integral;
+  double d;
+    
+  if (_previousTime!=0.0){
+	d = _kd*(_error - _lastError)/(_currentTime-_previousTime);
   }
-  else {
-    _firstUpdate = false;
-    _de = 0.0;
-    d_term = 0.0;
+  else{
+	d = 0.0;  
   }
+
+  _output = p + i + d;
   
-  // output = (K_p * e) + (K_d * (d_e / d_t)) + K_i * accumulatedError
-  _output = p_term + i_term + d_term;
-
-  // 6) Final output clamp (actuator limit)
-  _output = constrain(_output, _minOutput, _maxOutput);
-
-  // 7) Save state
-  _prevError = _error;
-  _prevTimeMs = curr_time;
-
-  return _output;
+  _clampOut = constrain(_output, _minOutput, _maxOutput);
   
+  _previousTime = _currentTime;
+  _lastError = _error;
+
+  return _clampOut;
 }
