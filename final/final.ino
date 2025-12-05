@@ -16,28 +16,32 @@ using namespace Pololu3piPlus32U4;
 #define gearRatio 75
 
 // ======================== PD VARIABLES ==================
-#define minOutput -100
-#define maxOutput 100
-#define kp 25
-#define kd 10
+#define minOutput -150
+#define maxOutput 150
+#define kp 33
+#define kd 3
 #define BASE_SPEED 100
 #define FAST_SPEED 200
-#define WALL_DIST 10
-#define FRONT_OBSTACLE_DIST 10
+#define WALL_DIST 6
+#define FRONT_OBSTACLE_DIST 5
 
 // ======================== PID VARIABLES ==================
 #define minOutputVel -100
 #define maxOutputVel 100
-#define kpVel 120 //Tune Kp here
-#define kdVel 70 //Tune Kd here
-#define kiVel 50 //Tune Ki here
+#define kpVel 1 //Tune Kp here
+#define kdVel 0.75 //Tune Kd here
+#define kiVel 0.3 //Tune Ki here
 #define clamp_iVel 10 //Tune ki integral clamp here
 #define base_speedVel 200
 
 // ============= Phase 3/4: IR Sensor Detection =================
 #define BLUE_MIN_CAL 200
 #define BLUE_MAX_CAL 500
-#define BLACK_THRESHOLD 900
+#define BLACK_THRESHOLD 700
+
+
+// ============= RETURN HOME BLACK SQUARE TRACKING =================
+#define EXPECTED_BLACK_SQUARES 3
 
 // ====================== HARDWARE OBJECTS ======================
 Motors motors;
@@ -55,7 +59,7 @@ Buzzer buzzer;
 float frontWallDist;
 float currentDistFromWall;
 float desiredDistFromWall = WALL_DIST;
-int PDout = 0;
+float PDout = 0;
 int currentSpeed = BASE_SPEED;
 long deltaL = 0;
 long deltaR = 0;
@@ -64,6 +68,7 @@ float theta;
 int pickCount = 0;
 int lineCenter = 2000;
 int traveled = 0;
+uint16_t flag;
 
 
 // ==================== MAP VARIABLES ============================
@@ -125,12 +130,13 @@ void loop() {
         // Check if there is a blue line.
         lineSensors.readCalibrated(cal);
 
-        unint16_t flag = cal[2];
+        flag = cal[2];
         if (flag > BLACK_THRESHOLD){
           currentMode = PICK_SERVICE;
           break;
         }
-        else if(flag >= BLUE_MIN_CAL && flag < BLUE_MAX_CAL){
+
+        if (flag >= BLUE_MIN_CAL && flag < BLUE_MAX_CAL){
           currentMode = LINE_FOLLOWING;
           break;
         }
@@ -178,13 +184,30 @@ void loop() {
           currentMode = DOCK_ALIGN;
         }*/
 
+        // Check if we've passed the expected number of black squares
+        if(blackSquareCount >= EXPECTED_BLACK_SQUARES){
+          Serial.println("Expected black squares reached!  Going to DOCK_ALIGN");
+          currentMode = DOCK_ALIGN;
+          break;
+        }
+
         returnHome();
 
         // Check if there is a blue line.
         lineSensors.readCalibrated(cal);
+        returnFlag = cal[2];
+        
+        if (returnFlag > BLACK_THRESHOLD){
+          blackSquareCount++;
+          Serial. print("Black square detected! Count: ");
+          Serial.println(blackSquareCount);
+          
+          // Skip over the black square so we don't count it multiple times
+          moveForward(gridSize);
+        }
 
         // Zoom if we have detected the blue line.
-        if(computeBlueLinePosition(cal, linePos)){
+        if (returnFlag >= BLUE_MIN_CAL && returnFlag < BLUE_MAX_CAL){
           currentMode = LINE_FOLLOWING;
         }
         break;
@@ -273,8 +296,8 @@ void wallLeft(float targetDist) {
     //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = positive, right = negative
-    int leftCmd = (int)(currentSpeed + PDout);
-    int rightCmd = (int)(currentSpeed - PDout);
+    int16_t leftCmd = (currentSpeed + PDout);
+    int16_t rightCmd = (currentSpeed - PDout);
 
     // Constrain max 400 speed
     leftCmd  = constrain(leftCmd,  -400, 400);
@@ -322,8 +345,8 @@ void wallRight(float targetDist) {
     //PDout = PIDcontroller.update(currentDistFromWall, desiredDistFromWall);
 
     // Left = negative, right = positive
-    int leftCmd = (int)(currentSpeed - PDout);
-    int rightCmd = (int)(currentSpeed + PDout);
+    int16_t leftCmd = (currentSpeed - PDout);
+    int16_t rightCmd = (currentSpeed + PDout);
 
     // Constrain max 400 speed
     leftCmd  = constrain(leftCmd,  -400, 400);
@@ -385,7 +408,9 @@ void explore(){
   // Wall follow per grid
   Serial.println("WallLeft Called");
   wallLeft(gridSize);
-  //traveled++;
+
+  //traveled counter
+  traveled++;
   Serial.print("Tiles counted: ");
   Serial.println(traveled);
 
@@ -409,6 +434,8 @@ void checkFrontWall(){
   else if (frontWallDist < FRONT_OBSTACLE_DIST){
     leftTurn();
   }
+  motors.setSpeeds(0,0);
+  delay(20);
 }
 
 bool blackSquareDetected(){
@@ -509,11 +536,11 @@ void pick_service(){
 
 // ================= Return home ================================
 void returnHome(){
-
   // To go home we need to do the same approach as explore/navigate but with right wall follow.
-  // Again localizing with odometry.
   wallRight(gridSize);
-  //traveled--;
+
+  //travel counter returning to 0
+  traveled--;
   Serial.print("Tiles remaining: ");
   Serial.println(traveled);
 
