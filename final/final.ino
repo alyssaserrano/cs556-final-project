@@ -69,6 +69,7 @@ int pickCount = 0;
 int lineCenter = 2000;
 int traveled = 0;
 uint16_t flag;
+int blackSquareCount = 0;
 
 
 // ==================== MAP VARIABLES ============================
@@ -195,9 +196,9 @@ void loop() {
 
         // Check if there is a blue line.
         lineSensors.readCalibrated(cal);
-        returnFlag = cal[2];
+        flag = cal[2];
         
-        if (returnFlag > BLACK_THRESHOLD){
+        if (flag > BLACK_THRESHOLD){
           blackSquareCount++;
           Serial. print("Black square detected! Count: ");
           Serial.println(blackSquareCount);
@@ -207,7 +208,7 @@ void loop() {
         }
 
         // Zoom if we have detected the blue line.
-        if (returnFlag >= BLUE_MIN_CAL && returnFlag < BLUE_MAX_CAL){
+        if (flag >= BLUE_MIN_CAL && flag < BLUE_MAX_CAL){
           currentMode = LINE_FOLLOWING;
         }
         break;
@@ -536,7 +537,9 @@ void pick_service(){
 
 // ================= Return home ================================
 void returnHome(){
+
   // To go home we need to do the same approach as explore/navigate but with right wall follow.
+  // Again localizing with odometry.
   wallRight(gridSize);
 
   //travel counter returning to 0
